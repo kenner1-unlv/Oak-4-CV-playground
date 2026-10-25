@@ -12,6 +12,14 @@ existing Orin global IDs. It does not yet record or train a model; the mono
 votes are matched to RGB tracks by timestamp and projected center, so missing
 evidence stays unknown. The installed 0.8.15 app is the rollback baseline.
 
+The first live v0.9.0 check on 2026-10-25 showed about 30 RGB result passes/s,
+roughly 10 distinct mono result timestamps/s on each side, and actual mono
+class votes in scene JSON and the Orin identity response. One 50-sample scene
+check found 366 left and 276 right matches across 416 RGB track records;
+these are geometric candidate matches, **not** measured match accuracy. The
+color viewer and `/training` route loaded in the browser. The v0.9.0 package
+SHA-256 is `a7583b0b8d76e4482b53cf06a497d533ddf6fe2166722cc6cf9dd493b9920faf`.
+
 | View | Browser data | Detection toggle |
 | --- | --- | --- |
 | Color video | 2560×1408 H.264 in a House V viewer powered by DepthAI; spatial field can be main or PiP | Color-aligned mask contours, segmented reticles, and labels on/off |
@@ -85,7 +93,7 @@ oakctl app start APP_ID_FROM_LIST --device "$OAK_DEVICE"
 Close the desktop OAK Viewer before starting this app; both compete for the
 camera pipeline. Confirm all views and the Orin result feed, then use
 `oakctl app enable APP_ID_FROM_LIST --device "$OAK_DEVICE"` for automatic
-start on future boots. The current v0.8.15 lab trial package has SHA-256
+start on future boots. The retained v0.8.15 lab trial package has SHA-256
 `e1d5cfca1d846025ef827ac37eea4efe49458e448dc02a526a8e226a46e32c60`.
 
 ## Browser and result checks
@@ -99,6 +107,7 @@ ssh -N -L 127.0.0.1:8082:192.168.50.60:8082 -L 127.0.0.1:8765:192.168.50.60:8765
 
 Open `http://127.0.0.1:8082/`. The House V HUD uses the Luxonis decoder under
 its color video stage and draws distance-colored target reticles and a spatial panel.
+Open `http://127.0.0.1:8082/training` for the live RGB/mono evidence view.
 In Color mode, **SPATIAL MAIN / VIDEO MAIN** swaps the large view and the
 picture-in-picture without recreating the video iframe. The spatial canvas
 can likewise swap with either mono camera. It returns to the target panel in
@@ -122,6 +131,19 @@ On mono views, the
 independent Detections ON/OFF button controls projected markers. Detections
 only displays targets on a dark canvas and disconnects browser video.
 
+To return to the verified v0.8.15 app, stop and disable v0.9.0, then start
+and enable the retained v0.8.15 app:
+
+```bash
+oakctl app disable bb056c6f-7f2c-4960-9259-ec956beeba84 --device "$OAK_DEVICE"
+oakctl app stop bb056c6f-7f2c-4960-9259-ec956beeba84 --device "$OAK_DEVICE"
+oakctl app start 4aa3b087-aa3c-456e-882e-e2dd3370c87f --device "$OAK_DEVICE"
+oakctl app enable 4aa3b087-aa3c-456e-882e-e2dd3370c87f --device "$OAK_DEVICE"
+```
+
+The Orin identity service was updated to carry the per-camera evidence; its
+previous script is retained at `/data/oak4/orin_identity-v0.8.15.py`.
+
 On the Orin, use [the result listener](../../scripts/oak4-result-listener.py):
 
 ```bash
@@ -130,7 +152,11 @@ python3 scripts/oak4-result-listener.py --bind "$ORIN_WIRED_IP" --sample-frames 
 
 ## Verification and limits
 
-- Version `0.8.15` is running and enabled for boot on the lab OAK. The earlier
+- Version `0.9.0` is running and enabled for boot on the lab OAK. Version
+  `0.8.15` remains installed and disabled for rollback. In the v0.9.0 trial,
+  30 camera tests and 10 Orin identity tests passed; the live scene carried
+  current mono detections and the Orin response carried matching evidence.
+  The earlier
   spatial, tracker, control, mono JPEG, and projection checks passed on the
   Orin; this update was checked for JavaScript syntax, live reticles, the
   vertical-return overhead, nearest-first target-index ordering, and both PiP

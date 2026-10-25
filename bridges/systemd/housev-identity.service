@@ -1,0 +1,14 @@
+[Unit]
+Description=House V Orin identity and mono evidence relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=ORIN_WIRED_IP=192.168.50.2
+ExecStart=/usr/bin/python3 /data/oak4/orin_identity.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

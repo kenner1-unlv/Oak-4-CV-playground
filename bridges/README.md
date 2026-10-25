@@ -68,9 +68,18 @@ Run it on the Orin independently of the full robot bringup:
 python3 /data/oak4/orin_identity.py
 ```
 
-The live lab instance is a transient user service named
-`housev-identity.service`. Its state file survives restarts, but the service
-must be started after an Orin reboot. The **LONGEST IDS** panel shows two
+The **LONGEST IDS** panel shows two
 recent global IDs by accumulated observed time, with YOLO in the first model
-column. The second column remains pending; see
+column. The spatial baseline's second column remains pending; the Training Lab
+view shows real left/right mono evidence. See
 [issue #2](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/2).
+
+# Boot service for the identity feed
+
+The v0.9.0 trial uses the checked-in
+[`housev-identity.service`](systemd/housev-identity.service). Copy it to
+`~/.config/systemd/user/housev-identity.service` on the Orin, then run
+`systemctl --user daemon-reload` and
+`systemctl --user enable --now housev-identity.service`. With user lingering
+enabled, the Orin starts the identity endpoint after reboot. The Unitree L2
+relay has a separate service and is not made persistent by this unit.
