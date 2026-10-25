@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+.env.*
+*.oakapp
+*.tar.xz
+*.mp4
+*.h264
+*.hevc
+*.mkv
+*.bag
+*.db3
+*.mcap
+dist/
+build/
