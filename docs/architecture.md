@@ -6,10 +6,10 @@ One camera app provides several switchable browser views.
 
 ```mermaid
 flowchart LR
-  RGB[RGB camera] --> Video[1920×1056 H.264]
+  RGB[RGB camera] --> Video[2560×1408 H.264]
   RGB --> Canvas[1280×704 inference canvas]
-  Canvas --> Tile[Rotate one quadrant per frame]
-  Tile --> NN[YOLOv8 Large segmentation]
+  Canvas --> Resize[Downscale full scene to 640×352]
+  Resize --> NN[YOLOv8 Large segmentation]
   Mono[Left + right mono] --> Stereo[Stereo depth]
   Mono --> Jpeg[On-demand grayscale JPEGs]
   Stereo --> Align[Align depth to RGB]
@@ -24,13 +24,14 @@ flowchart LR
   Overlay --> Viewer
 ```
 
-The source is in [spatial-segmentation](../apps/spatial-segmentation/). A DepthAI
-Script node rotates the model crop through four quadrants. The parser emits a
+The source is in [spatial-segmentation](../apps/spatial-segmentation/). The
+current baseline makes one full-scene model pass per camera frame;
+the earlier v0.5.2 baseline rotated four quadrant crops. The parser emits a
 mask, box, class, and score for each instance. The ResultNode pairs those
 outputs with an organized RGB-aligned point cloud and tile ID. It samples
 valid 3D points inside a shrunken mask, then uses a robust median for X/Y/Z
-and range. The in-memory tracker associates detections between visits to a
-quadrant and accumulates class evidence before changing a displayed label.
+and range. The in-memory tracker associates detections across frames and
+accumulates class evidence before changing a displayed label.
 
 The browser page on port 8082 proxies the color Visualizer, which uses a
 WebSocket on port 8765. Confidence and IoU sliders send
@@ -39,9 +40,13 @@ controls **model non-maxima suppression**; it does not change the tracker's
 separate association threshold. The control values are process state, so they
 reset when the app restarts.
 The House V page creates the color Visualizer only while Color video is
-selected. Detections only removes that iframe and polls scene JSON to draw red
-boxes and masks on a dark canvas. The encoder stays active in the camera graph
+selected. Detections only removes that iframe and polls scene JSON to draw
+distance-colored reticles and faint masks on a dark canvas. The encoder stays
+active in the camera graph
 for fast switching, but H.264 is no longer delivered to that browser.
+Within Color mode, the video iframe and spatial canvas share the main box.
+The PiP control changes their sizes without rebuilding the iframe or its
+WebSocket. Leaving Color mode returns the spatial canvas to the target panel.
 Left/right mono views request JPEGs on demand and can show or hide projected
 3D target-center markers. They do not reuse the color masks because the
 cameras have different optical centers, fields of view, and image geometry.
@@ -56,15 +61,33 @@ can be adjusted live independently of the display mode.
 | --- | --- | --- |
 | RGB inference canvas → one tile → YOLO | Classes, boxes, instance masks | No raw tile frames |
 | RGB color + left/right mono → stereo/RGBD | Align depth and measure mask-interior 3D points | No raw depth or point cloud |
-| RGB NV12 → H.264 encoder | 1920×1056 color video | Delivered only while Color video view is selected |
-| Annotation topic | Color-aligned masks, brackets, labels, range | Displayed with the Color video view when detections are on |
+| RGB NV12 → H.264 encoder | 2560×1408 color video | Delivered only while Color video view is selected |
+| Annotation topic | Stock color-aligned masks, brackets, labels, range | Available to the native Visualizer; House V draws its own scene-based reticles |
 | Left/right mono JPEGs | Grayscale diagnostic camera views | Only the selected mono frame is JPEG-encoded on request |
-| Scene JSON | Boxes, mask outlines, IDs, range, projected mono target centers | Polled by Detections only and by mono views when overlays are on |
+| Scene JSON | Boxes, mask outlines, IDs, range, projected mono target centers | Polled by House V in Color, Detections only, and mono views |
 | UDP result records | Compact detection/track metadata | Yes, to the Orin when configured |
 
 The YOLO COCO classes do not produce wall geometry. A green depth-edge
 prototype was tried and rejected because stereo noise yielded unhelpful room
 lines. Accurate wall geometry and calibrated lidar fusion remain future work.
+
+## Unitree L2 preview path
+
+The Orin's Unitree ROS 2 node publishes `/unilidar/cloud` and `/unilidar/imu`.
+The [browser relay](../bridges/README.md) samples every second cloud point and
+serves the latest scan to the camera app's `/api/lidar` proxy. The browser
+draws cyan dots over Color and Detections only. In the overhead panel, it
+retains ground-plane cells with returns at three or more height bands to
+suppress broad floor and ceiling planes, then colors those likely vertical
+returns by horizontal distance. This is a heuristic, not plane segmentation.
+The target reticles use OAK camera-relative range: red through 1.25 m,
+transitioning through orange, yellow, and green to cyan at 8 m or farther.
+The target index places tracked objects first, nearest to farthest; held and
+unknown-range records follow. These visual ranges are not yet transformed to
+the robot base frame.
+This is an approximate, uncalibrated projection with an assumed mount
+orientation and field of view. The L2 points are not associated with masks,
+assigned object labels, or included in the camera's UDP result records.
 
 ## Result record
 
@@ -108,11 +131,12 @@ records add projected center markers, without changing the UDP contract.
 
 ## Performance and limitations
 
-At a 30 FPS video target, the model executes 30 tile passes/s and visits each
-quadrant about 7.5 times/s. The app does not record video. A live 120-frame
-sample on the current scene measured 29.99 result passes/s, with 30 passes for
-each tile; the browser reported 30 FPS network/decode/render. These numbers
-do not measure end-to-end latency or inference accuracy.
+At a 30 FPS video target, the current baseline executes 30 full-scene model
+passes/s. The app does not record video. A live 120-frame check measured 30.2
+result passes/s with range measurements. The 2560×1408 browser stream ran at
+30 FPS network/decode/render in an earlier same-resolution candidate. These
+numbers do not measure end-to-end latency or inference accuracy; see the
+[resolution comparison](resolution-experiment.md).
 
 The tracker holds identities through short gaps but has no appearance model
 for re-identification after long occlusion. A segmentation mask can be wrong

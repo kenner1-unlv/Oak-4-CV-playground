@@ -3,344 +3,64 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OAK4 Camera and Detection Views</title>
-  <style>
-    :root { color-scheme: dark; font: 14px/1.4 system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: #0b1220; color: #e8eef9; }
-    header { display: flex; align-items: center; gap: 18px; padding: 12px 18px;
-      background: #101b2d; border-bottom: 1px solid #293b56; flex-wrap: wrap; }
-    strong { font-size: 16px; letter-spacing: .04em; }
-    .model, small, #mode-note { color: #93a8c5; font-size: 12px; }
-    .controls { display: flex; gap: 20px; flex-wrap: wrap; margin-left: auto; }
-    label { display: grid; gap: 4px; min-width: 175px; }
-    label span { display: flex; justify-content: space-between; gap: 12px; }
-    output { color: #fe6558; font-variant-numeric: tabular-nums; font-weight: 700; }
-    input[type=range] { width: 180px; accent-color: #fe5247; cursor: pointer; }
-    #status { min-width: 65px; font-size: 12px; color: #77d2ad; }
-    #ir-toggle { padding: 6px 10px; border: 1px solid #45607e; border-radius: 5px;
-      background: #17253a; color: #c3d3eb; cursor: pointer; }
-    #ir-toggle[aria-pressed=true] { border-color: #77d2ad; color: #77d2ad; }
-    nav { display: flex; gap: 8px; padding: 10px 16px; flex-wrap: wrap;
-      border-bottom: 1px solid #293b56; align-items: center; }
-    nav button { padding: 7px 13px; border: 1px solid #45607e; border-radius: 5px;
-      background: #17253a; color: #c3d3eb; cursor: pointer; }
-    nav button[aria-pressed=true] { background: #983731; border-color: #ed655c; color: white; }
-    #mode-note { margin-left: 8px; }
-    main { min-height: 380px; padding: 10px; }
-    iframe { width: 100%; height: calc(100vh - 166px); min-height: 480px;
-      border: 0; background: #0b1220; }
-    .mono-view { height: calc(100vh - 175px); min-height: 480px; display: flex;
-      align-items: center; justify-content: center; background: #050911; }
-    .mono-stage { position: relative; width: min(100%, 1600px); max-height: 100%;
-      aspect-ratio: 8 / 5; }
-    .mono-stage img { display: block; width: 100%; height: 100%;
-      object-fit: contain; image-rendering: auto; }
-    .mono-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%;
-      background: transparent; border: 0; pointer-events: none; }
-    .canvas-wrap { max-width: 1920px; margin: 0 auto; }
-    .canvas-heading { display: flex; justify-content: space-between; gap: 12px;
-      color: #9fb4d0; font-size: 12px; margin-bottom: 8px; }
-    canvas { width: 100%; height: auto; aspect-ratio: 20 / 11; display: block;
-      background: #070f1b; border: 1px solid #304661; border-radius: 8px; }
-    @media (max-width: 900px) { .controls { margin-left: 0; }
-      iframe,.mono-view { height: calc(100vh - 240px); } }
-  </style>
+  <title>House V / Vision Lab</title>
+  <link rel="stylesheet" href="/housev.css">
+  <script src="/housev.js" defer></script>
 </head>
 <body>
-  <header>
-    <div><strong>HOUSE V · VISION LAB</strong><div class="model">OAK4 targeting · YOLOv8 Large segmentation</div></div>
-    <div class="controls">
-      <label><span>Confidence <output id="confidence-value">0.25</output></span>
-        <input id="confidence" type="range" min="0" max="1" step="0.01" value="0.25">
-        <small>Higher hides uncertain detections</small></label>
-      <label><span>IoU suppression <output id="iou-value">0.50</output></span>
-        <input id="iou" type="range" min="0" max="1" step="0.01" value="0.50">
-        <small>Lower removes overlapping boxes</small></label>
-      <label><span>IR dot intensity <output id="ir-value">0.50</output></span>
-        <input id="ir-intensity" type="range" min="0.05" max="1" step="0.05" value="0.50">
-        <small>For stereo texture; visible on mono cameras</small></label>
-      <button id="ir-toggle" aria-pressed="false">IR dots OFF</button>
+  <div class="app-shell">
+    <header class="masthead">
+      <div class="brand">
+        <span class="brand-mark">V</span>
+        <div><strong>HOUSE V</strong><small>VISION LAB <i>//</i> OAK 4 D PRO</small></div>
+      </div>
+      <div class="headline-stats">
+        <span class="status-dot"></span><span id="connection-status">CONNECTING</span>
+        <span class="separator"></span><span>YOLOV8-L SEG</span>
+        <span class="separator"></span><span id="frame-status">FRAME --</span>
+      </div>
+      <div class="control-cluster">
+        <label>CONF <output id="confidence-value">0.25</output>
+          <input id="confidence" type="range" min="0" max="1" step="0.01" value="0.25"></label>
+        <label>IOU <output id="iou-value">0.50</output>
+          <input id="iou" type="range" min="0" max="1" step="0.01" value="0.50"></label>
+        <label>IR DOT <output id="ir-value">0.50</output>
+          <input id="ir-intensity" type="range" min="0.05" max="1" step="0.05" value="0.50"></label>
+        <button id="ir-toggle" class="chip" aria-pressed="false">IR OFF</button>
+      </div>
+    </header>
+
+    <nav class="modebar" aria-label="Camera source and display mode">
+      <span class="mode-label">SOURCE</span>
+      <button data-mode="color" aria-pressed="true">COLOR</button>
+      <button data-mode="left" aria-pressed="false">MONO / L</button>
+      <button data-mode="right" aria-pressed="false">MONO / R</button>
+      <button data-mode="detections" aria-pressed="false">TARGETS ONLY</button>
+      <span class="mode-divider"></span>
+      <button id="overlay-toggle" aria-pressed="true">LOCKS ON</button>
+      <button id="lidar-toggle" aria-pressed="true">L2 POINTS ON</button>
+      <button id="pip-toggle" aria-pressed="false">SPATIAL MAIN</button>
+      <span id="lidar-status" class="lidar-status">L2 CONNECTING · UNCALIBRATED</span>
+      <div id="zoom-controls" hidden>
+        <span class="mode-label">ZOOM ROI</span>
+        <label>X <input id="zoom-x" type="range" min="0.25" max="0.75" step="0.01" value="0.50"></label>
+        <label>Y <input id="zoom-y" type="range" min="0.25" max="0.75" step="0.01" value="0.50"></label>
+      </div>
+      <span id="mode-note"></span>
+    </nav>
+
+    <div class="workspace">
+      <main id="view" aria-label="Camera view"></main>
+      <aside class="intel-panel">
+        <div class="panel-heading"><span>TARGET INDEX</span><output id="target-count">00</output></div>
+        <div id="target-list"><p class="empty">Waiting for scene metadata…</p></div>
+        <div class="map-heading">SPATIAL FIELD <span>L2 FACES · RED NEAR → CYAN FAR</span></div>
+        <canvas id="spatial-map" width="280" height="190" aria-label="Top-down target positions"></canvas>
+        <div class="panel-foot"><span id="scene-age">AGE --</span><span id="range-count">RANGE --</span></div>
+      </aside>
     </div>
-    <span id="status" role="status">Connecting…</span>
-  </header>
-  <nav aria-label="Camera source and display mode">
-    <button data-mode="color" aria-pressed="true">Color video</button>
-    <button data-mode="left" aria-pressed="false">Left mono</button>
-    <button data-mode="right" aria-pressed="false">Right mono</button>
-    <button data-mode="detections" aria-pressed="false">Detections only</button>
-    <button id="overlay-toggle" aria-pressed="true">Detections ON</button>
-    <span id="mode-note"></span>
-  </nav>
-  <main id="view"></main>
-  <script>
-    const host=location.hostname;
-    const wsProtocol=location.protocol==='https:'?'wss:':'ws:';
-    const viewer=new URL(`${location.protocol}//${host}:8082/viewer/`);
-    viewer.searchParams.set('ws_url',`${wsProtocol}//${host}:8765`);
-    const view=document.getElementById('view');
-    const status=document.getElementById('status');
-    const note=document.getElementById('mode-note');
-    const keys=['confidence','iou'];
-    let mode=null;
-    let showDetections=true;
-    let viewerFrame=null;
-    let overlayGeneration=0;
-
-    function sync(state) {
-      for(const key of keys) {
-        document.getElementById(key).value=state[key];
-        document.getElementById(`${key}-value`).value=Number(state[key]).toFixed(2);
-      }
-    }
-    for(const key of keys) {
-      const slider=document.getElementById(key);
-      slider.addEventListener('input',()=>{
-        document.getElementById(`${key}-value`).value=Number(slider.value).toFixed(2);
-      });
-      slider.addEventListener('change',async()=>{
-        status.textContent='Applying…';
-        try {
-          const response=await fetch('/api/model',{
-            method:'PUT',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({[key]:Number(slider.value)})
-          });
-          if(!response.ok) throw new Error(await response.text());
-          sync(await response.json()); status.textContent='Live';
-        } catch(error) { status.textContent=`Error: ${error.message}`; }
-      });
-    }
-    fetch('/api/model').then(r=>r.json()).then(state=>{
-      sync(state); status.textContent='Live';
-    }).catch(()=>{status.textContent='Disconnected';});
-
-    const irToggle=document.getElementById('ir-toggle');
-    const irIntensity=document.getElementById('ir-intensity');
-    function syncIR(state) {
-      irToggle.setAttribute('aria-pressed',String(state.enabled));
-      irToggle.textContent=state.enabled?'IR dots ON':'IR dots OFF';
-      irIntensity.value=state.intensity;
-      document.getElementById('ir-value').value=Number(state.intensity).toFixed(2);
-    }
-    async function updateIR(payload) {
-      try {
-        const response=await fetch('/api/ir',{
-          method:'PUT',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify(payload)
-        });
-        if(!response.ok) throw new Error(await response.text());
-        syncIR(await response.json()); status.textContent='Live';
-      } catch(error) { status.textContent=`IR error: ${error.message}`; }
-    }
-    irToggle.addEventListener('click',()=>updateIR({
-      enabled:irToggle.getAttribute('aria-pressed')!=='true'
-    }));
-    irIntensity.addEventListener('input',()=>{
-      document.getElementById('ir-value').value=Number(irIntensity.value).toFixed(2);
-    });
-    irIntensity.addEventListener('change',()=>updateIR({intensity:Number(irIntensity.value)}));
-    fetch('/api/ir').then(r=>r.json()).then(syncIR).catch(()=>{});
-
-    function customizeViewer(frame) {
-      try {
-        frame._houseObserver?.disconnect();
-        const doc=frame.contentDocument;
-        if(!doc) return;
-        const apply=()=>{
-          const logo=doc.querySelector('img[alt="Luxonis"]');
-          if(logo) {
-            const brand=doc.createElement('strong');
-            brand.textContent='HOUSE V · VISION LAB';
-            brand.style.cssText='font:700 17px system-ui;color:#f0f5ff;letter-spacing:.06em;';
-            logo.replaceWith(brand);
-          }
-          doc.querySelectorAll('canvas.pointer-events-none').forEach(canvas=>{
-            canvas.style.visibility=showDetections?'visible':'hidden';
-          });
-        };
-        apply();
-        frame._houseObserver=new MutationObserver(apply);
-        frame._houseObserver.observe(doc.body,{childList:true,subtree:true});
-      } catch(error) { console.warn('Viewer customization unavailable',error); }
-    }
-
-    const overlayToggle=document.getElementById('overlay-toggle');
-    function refreshOverlayToggle() {
-      overlayToggle.disabled=mode==='detections';
-      overlayToggle.setAttribute('aria-pressed',String(mode==='detections'||showDetections));
-      overlayToggle.textContent=(mode==='detections'||showDetections)?
-        'Detections ON':'Detections OFF';
-    }
-    overlayToggle.addEventListener('click',()=>{
-      if(mode==='detections') return;
-      showDetections=!showDetections; refreshOverlayToggle();
-      if(mode==='color'&&viewerFrame) customizeViewer(viewerFrame);
-      if(mode==='left'||mode==='right') {
-        overlayGeneration++;
-        const canvas=view.querySelector('canvas');
-        canvas?.getContext('2d').clearRect(0,0,640,400);
-        if(showDetections) pollMonoOverlay(mode,canvas,overlayGeneration);
-      }
-    });
-
-    function setMode(next) {
-      if(mode===next) return;
-      viewerFrame?._houseObserver?.disconnect();
-      viewerFrame=null;
-      overlayGeneration++;
-      mode=next;
-      view.replaceChildren(); // Removing the iframe closes its video WebSocket.
-      document.querySelectorAll('nav button[data-mode]').forEach(button=>{
-        button.setAttribute('aria-pressed',String(button.dataset.mode===mode));
-      });
-      refreshOverlayToggle();
-      if(mode==='color') {
-        note.textContent='RGB camera · calibrated color overlays';
-        const frame=document.createElement('iframe');
-        frame.title='OAK Visualizer color stream'; frame.allow='fullscreen';
-        frame.onload=()=>customizeViewer(frame);
-        frame.src=viewer.href; view.append(frame); viewerFrame=frame;
-      } else if(mode==='left'||mode==='right') {
-        note.textContent='Grayscale camera · 3D target markers projected from RGB';
-        const wrapper=document.createElement('div'); wrapper.className='mono-view';
-        const stage=document.createElement('div'); stage.className='mono-stage';
-        const image=document.createElement('img');
-        image.alt=`${mode} monochrome camera`; stage.append(image);
-        const overlay=document.createElement('canvas');
-        overlay.width=640; overlay.height=400; stage.append(overlay);
-        wrapper.append(stage); view.append(wrapper);
-        loadMono(mode,image);
-        if(showDetections) pollMonoOverlay(mode,overlay,overlayGeneration);
-      } else {
-        note.textContent='Target tracks and masks only; video viewer disconnected';
-        const wrapper=document.createElement('div'); wrapper.className='canvas-wrap';
-        wrapper.innerHTML='<div class="canvas-heading"><span>COLOR CAMERA FOV · 1920 × 1056</span><span id="scene-status">Waiting for detections</span></div><canvas id="scene" width="1920" height="1056" aria-label="Detection-only target view"></canvas>';
-        view.append(wrapper); pollScene();
-      }
-    }
-    document.querySelectorAll('nav button[data-mode]').forEach(button=>
-      button.addEventListener('click',()=>setMode(button.dataset.mode)));
-
-    function loadMono(source,image) {
-      if(mode!==source||!image.isConnected) return;
-      image.onload=()=>setTimeout(()=>loadMono(source,image),65);
-      image.onerror=()=>setTimeout(()=>loadMono(source,image),350);
-      image.src=`/api/mono/${source}.jpg?t=${Date.now()}`;
-    }
-
-    async function pollMonoOverlay(source,canvas,generation) {
-      if(mode!==source||!showDetections||generation!==overlayGeneration||!canvas?.isConnected) return;
-      try {
-        const response=await fetch('/api/scene',{cache:'no-store'});
-        if(!response.ok) throw new Error(`HTTP ${response.status}`);
-        const scene=await response.json();
-        if(generation!==overlayGeneration) return;
-        const ctx=canvas.getContext('2d');
-        ctx.clearRect(0,0,640,400);
-        if(scene.age_ms!=null&&scene.age_ms<=1200) {
-          const occupied=[];
-          for(const obj of [...scene.objects].sort((a,b)=>
-            b.detector_score-a.detector_score)) {
-            const marker=obj.mono_markers?.[source];
-            if(!marker) continue;
-            const x=marker[0]*640,y=marker[1]*400;
-            ctx.strokeStyle='#ff504a';ctx.fillStyle='#ff504a';ctx.lineWidth=1.5;
-            ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.stroke();
-            ctx.beginPath();ctx.moveTo(x-9,y);ctx.lineTo(x+9,y);
-            ctx.moveTo(x,y-9);ctx.lineTo(x,y+9);ctx.stroke();
-            const range=obj.range_m==null?'--':`${obj.range_m.toFixed(1)}m`;
-            const label=`#${obj.track_id} ${obj.label} ${range}`;
-            ctx.font='9px monospace';
-            const textWidth=ctx.measureText(label).width;
-            const choices=[[x+8,y-9],[x-textWidth-8,y-9],
-                           [x+8,y+15],[x-textWidth-8,y+15]];
-            let best=null,cost=Infinity;
-            for(const [cx,cy] of choices) {
-              const tx=Math.min(Math.max(3,cx),640-textWidth-5);
-              const ty=Math.min(Math.max(12,cy),395);
-              const rect=[tx-2,ty-10,tx+textWidth+2,ty+3];
-              const overlap=occupied.reduce((sum,other)=>sum+
-                Math.max(0,Math.min(rect[2],other[2])-Math.max(rect[0],other[0]))*
-                Math.max(0,Math.min(rect[3],other[3])-Math.max(rect[1],other[1])),0);
-              if(overlap<cost) {cost=overlap;best=[tx,ty,rect];}
-            }
-            const [tx,ty,rect]=best;occupied.push(rect);
-            ctx.fillStyle='rgba(3,7,15,.85)';ctx.fillRect(tx-2,ty-10,textWidth+4,13);
-            ctx.fillStyle='#ff6659';ctx.fillText(label,tx,ty);
-          }
-        }
-      } catch(error) { console.warn('Mono overlay unavailable',error); }
-      if(mode===source&&showDetections&&generation===overlayGeneration)
-        setTimeout(()=>pollMonoOverlay(source,canvas,generation),100);
-    }
-
-    function bracket(ctx,x,y,w,h,color) {
-      const len=Math.min(38,w*.3,h*.3),radius=Math.min(12,len*.35);
-      ctx.strokeStyle=color;ctx.lineWidth=3;
-      for(const [px,py,sx,sy] of [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]]) {
-        ctx.beginPath();ctx.moveTo(px+sx*len,py);ctx.lineTo(px+sx*radius,py);
-        ctx.quadraticCurveTo(px,py,px,py+sy*radius);
-        ctx.lineTo(px,py+sy*len);ctx.stroke();
-      }
-    }
-    function renderScene(scene) {
-      const canvas=document.getElementById('scene'); if(!canvas) return;
-      const ctx=canvas.getContext('2d'),W=canvas.width,H=canvas.height;
-      ctx.fillStyle='#070f1b';ctx.fillRect(0,0,W,H);
-      const stale=scene.age_ms==null||scene.age_ms>1200;
-      if(stale) { ctx.fillStyle='#93a8c5';ctx.font='24px monospace';
-        ctx.fillText('NO CURRENT DETECTIONS',28,48);return; }
-      const used=[];
-      for(const obj of [...scene.objects].sort((a,b)=>b.detector_score-a.detector_score)) {
-        const [x0,y0,x1,y1]=obj.bbox_xyxy_norm;
-        const x=x0*W,y=y0*H,w=(x1-x0)*W,h=(y1-y0)*H;
-        const color=obj.track_state==='held'?'#e65854':'#ff6659';
-        bracket(ctx,x,y,w,h,color);
-        for(const outline of obj.mask_outlines||[]) {
-          if(outline.length<3) continue;
-          ctx.beginPath();outline.forEach(([px,py],i)=>i?
-            ctx.lineTo(px*W,py*H):ctx.moveTo(px*W,py*H));
-          ctx.closePath();ctx.strokeStyle=color;ctx.lineWidth=1;ctx.stroke();
-        }
-        const range=obj.range_m==null?'RANGE --':`${obj.range_m.toFixed(2)}M`;
-        const title=`${obj.track_state==='held'?'HOLD':'LOCK'} ${String(obj.track_id).padStart(3,'0')} / ${obj.label.toUpperCase()} / ${range}`;
-        const detail=`NN ${Math.round(obj.detector_score*100)}%  DEPTH ${Math.round(obj.depth_valid_fraction*100)}%`;
-        ctx.font='20px monospace';const tw=Math.min(W-20,Math.max(310,ctx.measureText(title).width+16));
-        const options=[[x,y-56],[x+w+8,y],[x,y+h+8],[x-tw-8,y],[x,y+8]];
-        let best=null,cost=Infinity;
-        for(const [cx,cy] of options) {
-          const tx=Math.min(Math.max(8,cx),W-tw-8),ty=Math.min(Math.max(28,cy),H-56);
-          const rect=[tx,ty-24,tx+tw,ty+24];
-          const overlap=used.reduce((sum,other)=>sum+
-            Math.max(0,Math.min(rect[2],other[2])-Math.max(rect[0],other[0]))*
-            Math.max(0,Math.min(rect[3],other[3])-Math.max(rect[1],other[1])),0);
-          const score=overlap+Math.abs(tx-cx)*2+Math.abs(ty-cy)*2;
-          if(score<cost) {cost=score;best=[tx,ty,rect];}
-        }
-        const [tx,ty,rect]=best;used.push(rect);
-        ctx.fillStyle='rgba(2,7,15,.88)';ctx.fillRect(tx-4,ty-23,tw,49);
-        ctx.fillStyle=color;ctx.fillText(title,tx,ty);
-        ctx.font='15px monospace';ctx.fillStyle='#ffb2a5';ctx.fillText(detail,tx,ty+20);
-      }
-    }
-    async function pollScene() {
-      if(mode!=='detections') return;
-      try {
-        const response=await fetch('/api/scene',{cache:'no-store'});
-        if(!response.ok) throw new Error(`HTTP ${response.status}`);
-        const scene=await response.json();
-        renderScene(scene);
-        const current=scene.age_ms!=null&&scene.age_ms<=1200;
-        document.getElementById('scene-status').textContent=current?
-          `FRAME ${scene.frame_id} · ${scene.objects.length} TARGETS`:'No current detections';
-      } catch(error) {
-        renderScene({age_ms:null});
-        const label=document.getElementById('scene-status');
-        if(label) label.textContent=`Disconnected: ${error.message}`;
-      }
-      if(mode==='detections') setTimeout(pollScene,100);
-    }
-    setMode('color');
-  </script>
+    <footer><span>HOUSE V <i>//</i> PERCEPTION BASELINE</span>
+      <span>COLOR / STEREO / TARGET DATA · POWERED BY DEPTHAI</span></footer>
+  </div>
 </body>
 </html>

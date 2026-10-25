@@ -7,10 +7,10 @@ inference pipeline:
 
 | View | Browser data | Detection toggle |
 | --- | --- | --- |
-| Color video | 1920×1056 H.264 in Luxonis Visualizer | Color-aligned mask, box, and label annotations on/off |
-| Left mono | On-demand JPEG from the left 640×400 grayscale stereo camera | Calibrated 3D target-center markers on/off |
-| Right mono | On-demand JPEG from the right 640×400 grayscale stereo camera | Calibrated 3D target-center markers on/off |
-| Detections only | JSON target records on a dark, color-camera-aligned canvas | Red tracked masks and boxes are the view |
+| Color video | 2560×1408 H.264 in a House V viewer powered by DepthAI; spatial field can be main or PiP | Color-aligned mask contours, segmented reticles, and labels on/off |
+| Left mono | On-demand JPEG from the left 640×400 grayscale stereo camera | Projected 3D target reticles on/off |
+| Right mono | On-demand JPEG from the right 640×400 grayscale stereo camera | Projected 3D target reticles on/off |
+| Detections only | JSON target records on a dark, color-camera-aligned canvas | Distance-colored reticles and mask contours are the view |
 
 The mono images have different optical centers and field of view from RGB.
 The app transforms each target's measured RGB-frame 3D point into the selected
@@ -32,17 +32,18 @@ as useful for stereo matching on low-texture surfaces.
 - Model: `luxonis/yolov8-instance-segmentation-large:coco-640x352`, declared
   in [the model YAML](models/yolov8_seg_large.RVC4.yaml). The build bundles
   the model into the `.oakapp` package.
-- Video: 1920×1056 H.264 at a 30 FPS target, 40 Mbps encoder target in the
+- Video: 2560×1408 H.264 at a 30 FPS target, 60 Mbps encoder target in the
   deployed runtime. Detections only removes the browser Visualizer iframe and
   stops H.264 **delivery to that browser**. The encoder remains in the running
   camera graph for immediate switching back to video.
-- Inference: one 640×352 quadrant of a 1280×704 color inference canvas per
-  frame. Four passes cover the image; each region refreshes about 7.5/s.
+- Inference: one full 1280×704 RGB frame downscaled into the fixed 640×352
+  model input each pass. The full field refreshes at the 30-pass/s target;
+  distant/small objects lose detail compared with the earlier 2×2 baseline.
 - Depth: stereo left/right plus synchronized color/depth alignment. Valid
   points inside each segmentation mask produce robust XYZ and range; poor
   depth leaves range unknown.
 - Tracking: short-term IoU/3D association and accumulated class evidence.
-  IDs persist between quadrant visits, without long-term re-identification.
+  IDs persist through brief missed detections, without long-term re-identification.
 - Controls: live confidence and IoU suppression sliders send
   `DetectionParserConfig` to the native parser. Defaults are 0.25 and 0.50
   after restart.
@@ -65,10 +66,11 @@ export ORIN_WIRED_IP=192.168.50.2
 mkdir -p /data/oak4/packages
 oakctl app build apps/spatial-segmentation --device "$OAK_DEVICE" \
   --output /data/oak4/packages
-oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-5-2.oakapp \
+oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-8-12.oakapp \
   --device "$OAK_DEVICE" --force-new --start false --enable false \
   --env ORIN_RESULT_HOST="$ORIN_WIRED_IP" --env OAK4_FPS=30 \
-  --env OAK4_VIDEO_SCALE=3 --env OAK4_VIDEO_BITRATE_KBPS=40000
+  --env OAK4_SCAN_MODE=full --env OAK4_VIDEO_SCALE=4 \
+  --env OAK4_VIDEO_BITRATE_KBPS=60000
 oakctl app list --format json --device "$OAK_DEVICE"
 oakctl app start APP_ID_FROM_LIST --device "$OAK_DEVICE"
 ```
@@ -76,8 +78,8 @@ oakctl app start APP_ID_FROM_LIST --device "$OAK_DEVICE"
 Close the desktop OAK Viewer before starting this app; both compete for the
 camera pipeline. Confirm all views and the Orin result feed, then use
 `oakctl app enable APP_ID_FROM_LIST --device "$OAK_DEVICE"` for automatic
-start on future boots. The deployed v0.5.2 package on this lab's Orin has
-SHA-256 `76c2b01596eefdfe38aea6a1e7eb529ae774288205ac0f6cb9c82bd1602088f6`.
+start on future boots. The deployed v0.8.12 package on this lab's Orin has
+SHA-256 `7230d73aa5801647f1577a3ce9147ba66a203bb2bd6f2829150a86012ae20cc1`.
 
 ## Browser and result checks
 
@@ -88,10 +90,18 @@ and WebSocket through the Orin from the development PC:
 ssh -N -L 127.0.0.1:8082:192.168.50.60:8082 -L 127.0.0.1:8765:192.168.50.60:8765 sauce@192.168.1.2
 ```
 
-Open `http://127.0.0.1:8082/`. The page is branded House V; it embeds the
-Luxonis Visualizer only while Color video is selected. On mono views, the
+Open `http://127.0.0.1:8082/`. The House V HUD uses the Luxonis decoder under
+its color video stage and draws distance-colored target reticles and a spatial panel.
+In Color mode, **SPATIAL MAIN / VIDEO MAIN** swaps the large view and the
+picture-in-picture without recreating the video iframe. The spatial canvas
+returns to the target panel in mono and Detections only modes.
+The L2 toggle draws sampled cyan points from the Orin relay via the same-origin
+`/api/lidar` endpoint. This first projection uses an assumed mount orientation
+and field of view. It is explicitly uncalibrated and does not assign semantic
+labels to LiDAR points. See the [relay guide](../../bridges/README.md).
+On mono views, the
 independent Detections ON/OFF button controls projected markers. Detections
-only displays red targets on a dark canvas and disconnects browser video.
+only displays targets on a dark canvas and disconnects browser video.
 
 On the Orin, use [the result listener](../../scripts/oak4-result-listener.py):
 
@@ -101,17 +111,26 @@ python3 scripts/oak4-result-listener.py --bind "$ORIN_WIRED_IP" --sample-frames 
 
 ## Verification and limits
 
-- Version `0.5.2` is running and enabled for boot on the lab OAK. Twenty
-  spatial, tracker, control, mono JPEG, and projection tests passed on the Orin.
+- Version `0.8.12` is running and enabled for boot on the lab OAK. The earlier
+  spatial, tracker, control, mono JPEG, and projection checks passed on the
+  Orin; this update was checked for JavaScript syntax, live reticles, the
+  vertical-return overhead, nearest-first target-index ordering, and both PiP
+  directions with the same live video iframe.
 - The IR dot command succeeded at 0.50 intensity; live off and on commands
   were accepted. Both mono JPEG endpoints returned distinct grayscale frames.
-- The browser displayed color video with House V branding, left/right mono,
-  a separate overlay toggle, and Detections only. A 120-frame Orin sample
-  delivered 30.1 passes/s, 30 per quadrant, with 1,117 ranged object records
-  in this room scene.
-- A 40-poll detection-only HTTP sample averaged 7.2 KB of scene JSON per
-  response, or 0.473 Mbps of response payload. The color video view showed
-  about 37 Mbps in an earlier room check. These are not controlled accuracy
+- The browser displayed 2560×1408 color video, left/right mono, an independent
+  overlay toggle, Detections only, a live target index, and an X/Z spatial
+  panel. A 120-frame Orin sample delivered 30.2 full-scene passes/s with 745
+  ranged object records in this room scene.
+- The Orin L2 driver published about 12 clouds/s and 250 IMU messages/s.
+  A cloud contained about 5,400 points at 32 bytes per point. The browser
+  relay sampled every second point. A live page showed a few hundred likely
+  vertical returns per scan after the overhead filter and distance-colored
+  camera reticles. The target index listed tracked objects in ascending range.
+- A 40-poll detection-only HTTP sample on the earlier v0.5.2 baseline averaged
+  7.2 KB of scene JSON per response, or 0.473 Mbps of response payload. The
+  2560×1408 video view showed 30 FPS and about 56 Mbps in a resolution test.
+  These are not controlled accuracy
   measurements or full network accounting.
 - Mono marker position is an estimate based on the target's median depth and
   factory camera calibration. Quantitative reprojection error, mask quality,

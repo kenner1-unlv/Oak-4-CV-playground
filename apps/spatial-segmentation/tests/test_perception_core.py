@@ -6,7 +6,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from perception_core import Observation, SpatialEstimate, TrackManager, estimate_spatial
-from tile_geometry import mask_and_points_for_tile, quadrants, remap_box
+from tile_geometry import (Tile, mask_and_points_for_tile, quadrants,
+                           remap_box, paired_crops, tiles_for_grid)
 from hud import rounded_brackets, target_lines
 
 
@@ -116,6 +117,87 @@ class TrackingTests(unittest.TestCase):
 
 
 class TilingTests(unittest.TestCase):
+    def test_full_frame_and_zoom_masks_map_to_same_depth_frame(self) -> None:
+        points = np.zeros((352, 640, 3), dtype=np.float32)
+        points[:, :, 2] = 2000
+        mask = np.ones((352, 640), dtype=np.uint8)
+        full = Tile(0, 0, 1280, 704)
+        zoom = Tile(320, 176, 640, 352)
+        full_mask, full_region = mask_and_points_for_tile(
+            mask, points, full, (1280, 704)
+        )
+        zoom_mask, zoom_region = mask_and_points_for_tile(
+            mask, points, zoom, (1280, 704)
+        )
+        self.assertEqual(full_region.shape, (352, 640, 3))
+        self.assertEqual(zoom_region.shape, (176, 320, 3))
+        self.assertAlmostEqual(estimate_spatial(full_mask, full_region).range_m, 2)
+        self.assertAlmostEqual(estimate_spatial(zoom_mask, zoom_region).range_m, 2)
+        self.assertEqual(remap_box((0, 0, 1, 1), zoom, (1280, 704)),
+                         (0.25, 0.25, 0.75, 0.75))
+
+    def test_two_wide_overlapping_crops_preserve_model_aspect(self) -> None:
+        left, right = paired_crops((1280, 704), (640, 352), 1.5)
+        self.assertEqual((left.x, left.y, left.width, left.height),
+                         (0, 88, 960, 528))
+        self.assertEqual((right.x, right.y, right.width, right.height),
+                         (320, 88, 960, 528))
+        self.assertEqual(left.width / left.height, 640 / 352)
+        self.assertEqual(paired_crops((1280, 704), (640, 352), 1.75)[1].x,
+                         160)
+        points = np.zeros((352, 640, 3), dtype=np.float32)
+        points[:, :, 2] = 2000
+        # The NN mask stays 640x352 while the source crop is 960x528.
+        mask = np.ones((352, 640), dtype=np.uint8)
+        reduced, region = mask_and_points_for_tile(mask, points, right,
+                                                    (1280, 704))
+        self.assertEqual(region.shape, (264, 480, 3))
+        self.assertTrue(reduced.all())
+        self.assertAlmostEqual(estimate_spatial(reduced, region).range_m, 2.0)
+
+    def test_two_pass_tracker_holds_between_left_and_right(self) -> None:
+        manager = TrackManager(grid_size=2, sweep_frames=2)
+        spatial = SpatialEstimate((0, 0, 2000), 2.0, 1.0, 0.0)
+        observation = Observation("chair", 0.9, (0.2, 0.4, 0.4, 0.8),
+                                  spatial, 0, tile_index=0)
+        first, _ = manager.update([observation])[0]
+        manager.update([])
+        self.assertEqual(manager.active()[0].id, first.id)
+        second, _ = manager.update([observation])[0]
+        self.assertEqual(second.id, first.id)
+
+    def test_nine_tiles_cover_wide_canvas_and_depth(self) -> None:
+        tiles = tiles_for_grid(30, 30, 3)
+        self.assertEqual(len(tiles), 9)
+        self.assertEqual(tiles[8].x, 20)
+        self.assertEqual(tiles[8].y, 20)
+        self.assertEqual(remap_box((0, 0, 1, 1), tiles[8], (30, 30)),
+                         (2/3, 2/3, 1.0, 1.0))
+        points = np.zeros((8, 8, 3), dtype=np.float32)
+        points[5:, 5:, 2] = 2500
+        mask = np.ones((10, 10), dtype=np.uint8)
+        reduced, region = mask_and_points_for_tile(mask, points, tiles[8],
+                                                    (30, 30))
+        self.assertEqual(region.shape, (3, 3, 3))
+        self.assertTrue(reduced.all())
+        self.assertTrue(np.all(region[:, :, 2] == 2500))
+
+    def test_nine_tile_sweep_keeps_track_visible_and_joins_seam(self) -> None:
+        manager = TrackManager(grid_size=3)
+        spatial = SpatialEstimate((0, 0, 2000), 2.0, 1.0, 0.0)
+        left = Observation("person", 0.8, (0.25, 0.2, 1/3, 0.45),
+                           spatial, 0, tile_index=0)
+        right = Observation("person", 0.9, (1/3, 0.2, 0.44, 0.45),
+                            spatial, 0, tile_index=1)
+        first, _ = manager.update([left])[0]
+        second, _ = manager.update([right])[0]
+        self.assertEqual(first.id, second.id)
+        for _ in range(7):
+            manager.update([])
+        self.assertEqual(manager.active()[0].missed, 7)
+        manager.update([left])
+        self.assertEqual(manager.active()[0].id, first.id)
+
     def test_quadrant_box_maps_to_full_frame(self) -> None:
         tile = quadrants(1280, 704)[3]
         self.assertEqual(

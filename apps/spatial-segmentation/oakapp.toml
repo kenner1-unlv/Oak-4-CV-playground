@@ -1,5 +1,5 @@
 identifier = "com.sauce.oak4.perception"
-app_version = "0.5.2"
+app_version = "0.8.12"
 entrypoint = ["bash", "-c", "python3.12 -u /app/main.py"]
 assign_frontend_port = true
 

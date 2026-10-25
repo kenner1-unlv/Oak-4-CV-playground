@@ -42,7 +42,7 @@ Do not infer model accuracy from the current live FPS checks or from a few
 visually convincing frames. The same scenes should be rerun when testing a
 different model, tile size, threshold, or camera pipeline.
 
-## Fixed lidar reference: planned
+## Fixed lidar reference: preview running, calibration planned
 
 A Unitree L2 in a fixed pose could provide independent range measurements for
 the same scenes. Before comparing it with OAK stereo, measure the rigid
@@ -51,18 +51,21 @@ returns correspond to each visible object or mask. Measure both sensors on
 simple targets at known distances first. Then report camera range error,
 missing-depth rate, and error versus surface type, distance, and occlusion.
 
-The lidar is not connected to this app yet. Its readings should be treated as
-a separate reference with its own calibration and uncertainty, not as
-automatically perfect ground truth.
+The Orin now relays a sampled L2 cloud into the browser for an unaligned
+preview. The camera app does not fuse it with detections or assign labels to
+LiDAR points. A rigid camera-to-LiDAR mount, measured spacing and orientation,
+and timestamp alignment are still needed before comparing sensors. Treat the
+L2 as a separate sensor with its own uncertainty, not automatically perfect
+ground truth.
 
 ## Candidate apps
 
 | Pipeline | Question to answer | Evidence to collect |
 | --- | --- | --- |
-| Current spatial segmentation | Which objects are present and where are they in 3D? | Mask quality, class errors, range error, tile-seam stability |
+| Current spatial segmentation | Which objects are present and where are they in 3D? | Mask quality, class errors, dense-scene recall, range error |
 | Current detections-only browser mode | Are target locks useful without receiving H.264 video? | HTTP payload rate, target alignment, stale-data behavior |
 | Future room geometry | Can stereo or lidar reveal real wall boundaries without noisy lines? | Hand-marked edge alignment, false edges, missing geometry |
-| Full-frame or alternative tiling | Does broader context improve small/overlapping objects? | Recall versus FPS, latency, and network cost |
+| Alternative inference crops or a second model | Can distant/small objects improve without losing full-scene context? | Recall versus FPS, latency, and network cost |
 | Open-vocabulary detection | Can text-specified targets be found reliably in this scene? | Prompt sensitivity, false positives, class coverage |
 | Motion/identity tracking | Can an object keep one ID through movement and brief occlusion? | ID switches, recovery time, track fragmentation |
 | Stereo/lidar comparison and fusion | When does each sensor provide a reliable distance? | Calibrated error, missing data, synchronization error |

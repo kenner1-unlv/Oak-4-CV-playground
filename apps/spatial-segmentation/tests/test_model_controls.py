@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from model_controls import (IRProjectorControl, ModelControls, MonoFrameStore,
-                            SceneState, make_handler)
+                            SceneState, ZoomControl, make_handler)
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -49,6 +49,11 @@ class FakeDevice:
         return self.accept
 
 
+class FakeBuffer:
+    def setData(self, value):
+        self.data = value
+
+
 class ModelControlTests(unittest.TestCase):
     def test_thresholds_change_live_and_invalid_values_leave_both_unchanged(self):
         parser = FakeParser()
@@ -77,6 +82,10 @@ class ModelControlTests(unittest.TestCase):
         try:
             with urlopen(base + "/") as response:
                 self.assertIn(b'id="confidence"', response.read())
+            with urlopen(base + "/housev.css") as response:
+                self.assertIn(b".target-card", response.read())
+            with urlopen(base + "/housev.js") as response:
+                self.assertIn(b"drawHud", response.read())
             request = Request(base + "/api/model", data=b'{"iou":0.7}',
                               headers={"Content-Type": "application/json"},
                               method="PUT")
@@ -160,3 +169,14 @@ class ModelControlTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             control.apply({"enabled": True})
         self.assertFalse(control.read()["enabled"])
+
+    def test_zoom_roi_moves_and_clamps_to_canvas(self):
+        queue = FakeQueue()
+        zoom = ZoomControl(queue, FakeBuffer, (1280, 704), (640, 352))
+        self.assertEqual(zoom.read()["box_xyxy_norm"],
+                         [0.25, 0.25, 0.75, 0.75])
+        result = zoom.apply({"center_x": 1.0, "center_y": 0.0})
+        self.assertEqual(result["box_xyxy_norm"], [0.5, 0.0, 1.0, 0.5])
+        self.assertEqual(queue.sent[-1].data, [128, 2, 0, 0])
+        with self.assertRaises(ValueError):
+            zoom.apply({"center_x": -0.1})

@@ -96,24 +96,38 @@ def _union_box(parts: list[Observation]) -> tuple[float, float, float, float]:
 
 def _touches_shared_tile_edge(
     a: tuple[float, ...], b: tuple[float, ...],
-    old_tile: int, new_tile: int,
+    old_tile: int, new_tile: int, grid_size: int = 2,
 ) -> bool:
-    pair = frozenset((old_tile, new_tile))
-    if pair in (frozenset((0, 1)), frozenset((2, 3))):
-        return (a[2] >= 0.47 and b[0] <= 0.53 or
-                b[2] >= 0.47 and a[0] <= 0.53) and (
-                    min(a[3], b[3]) - max(a[1], b[1]) >= -0.03)
-    if pair in (frozenset((0, 2)), frozenset((1, 3))):
-        return (a[3] >= 0.47 and b[1] <= 0.53 or
-                b[3] >= 0.47 and a[1] <= 0.53) and (
-                    min(a[2], b[2]) - max(a[0], b[0]) >= -0.03)
+    old_row, old_col = divmod(old_tile, grid_size)
+    new_row, new_col = divmod(new_tile, grid_size)
+    if old_row == new_row and abs(old_col - new_col) == 1:
+        boundary = max(old_col, new_col) / grid_size
+        left, right = (a, b) if old_col < new_col else (b, a)
+        return (left[2] >= boundary - 0.03 and
+                right[0] <= boundary + 0.03 and
+                min(a[3], b[3]) - max(a[1], b[1]) >= -0.03)
+    if old_col == new_col and abs(old_row - new_row) == 1:
+        boundary = max(old_row, new_row) / grid_size
+        top, bottom = (a, b) if old_row < new_row else (b, a)
+        return (top[3] >= boundary - 0.03 and
+                bottom[1] <= boundary + 0.03 and
+                min(a[2], b[2]) - max(a[0], b[0]) >= -0.03)
     return False
 
 
 class TrackManager:
     """Associate boxes across frames without requiring the class to match."""
 
-    def __init__(self) -> None:
+    def __init__(self, grid_size: int = 2,
+                 sweep_frames: int | None = None) -> None:
+        if grid_size not in (2, 3, 4):
+            raise ValueError("grid_size must be 2, 3, or 4")
+        self.grid_size = grid_size
+        self.sweep_frames = sweep_frames or grid_size * grid_size
+        if self.sweep_frames < 1:
+            raise ValueError("sweep_frames must be at least 1")
+        self.part_max_age = max(4, self.sweep_frames)
+        self.hold_frames = max(3, self.sweep_frames - 1)
         self._tracks: dict[int, Track] = {}
         self._next_id = 1
         self._frame_number = 0
@@ -129,30 +143,35 @@ class TrackManager:
                 first = self._tracks[first_id]
                 if (first.last_observation is None or
                     first.last_observation.label != "person" or
-                    first.xyz_mm is None or first.missed > 3):
+                    first.xyz_mm is None or
+                    first.missed >= self.sweep_frames):
                     continue
                 for second_id in ids[first_index + 1:]:
                     second = self._tracks[second_id]
                     if (second.last_observation is None or
                         second.last_observation.label != "person" or
-                        second.xyz_mm is None or second.missed > 3 or
+                        second.xyz_mm is None or
+                        second.missed >= self.sweep_frames or
                         set(first.tile_observations) &
                         set(second.tile_observations) or
                         dist(first.xyz_mm, second.xyz_mm) > 1500):
                         continue
                     if not any(
                         _touches_shared_tile_edge(
-                            part_a.bbox, part_b.bbox, tile_a, tile_b
+                            part_a.bbox, part_b.bbox, tile_a, tile_b,
+                            self.grid_size,
                         )
                         for tile_a, (seen_a, part_a) in first.tile_observations.items()
                         for tile_b, (seen_b, part_b) in second.tile_observations.items()
-                        if (self._frame_number - seen_a <= 4 and
-                            self._frame_number - seen_b <= 4)
+                        if (self._frame_number - seen_a <= self.part_max_age and
+                            self._frame_number - seen_b <= self.part_max_age)
                     ):
                         continue
                     second_is_newer = second.missed < first.missed
                     first.tile_observations.update(second.tile_observations)
-                    parts = first.recent_parts(self._frame_number, max_age=4)
+                    parts = first.recent_parts(
+                        self._frame_number, max_age=self.part_max_age
+                    )
                     first.bbox = _union_box(parts)
                     first.missed = min(first.missed, second.missed)
                     first.observations += second.observations
@@ -176,9 +195,11 @@ class TrackManager:
         for track in self._tracks.values():
             track.missed += 1
             for tile_id, (seen, _) in list(track.tile_observations.items()):
-                if self._frame_number - seen > 4:
+                if self._frame_number - seen > self.part_max_age:
                     del track.tile_observations[tile_id]
-            parts = track.recent_parts(self._frame_number, max_age=4)
+            parts = track.recent_parts(
+                self._frame_number, max_age=self.part_max_age
+            )
             if parts:
                 track.bbox = _union_box(parts)
         candidates: list[tuple[float, int, int]] = []
@@ -198,6 +219,7 @@ class TrackManager:
                             _touches_shared_tile_edge(
                                 part.bbox, observation.bbox,
                                 old_tile, observation.tile_index,
+                                self.grid_size,
                             )
                             for old_tile, (_, part) in track.tile_observations.items()
                         )):
@@ -230,7 +252,9 @@ class TrackManager:
             track.tile_observations[observation.tile_index] = (
                 self._frame_number, observation
             )
-            parts = track.recent_parts(self._frame_number, max_age=4)
+            parts = track.recent_parts(
+                self._frame_number, max_age=self.part_max_age
+            )
             track.bbox = _union_box(parts)
             track.missed = 0
             track.observations += 1
@@ -250,12 +274,14 @@ class TrackManager:
                 track.label = best
             result.append((track, observation))
         for track_id in list(self._tracks):
-            if self._tracks[track_id].missed > 10:
+            if self._tracks[track_id].missed > max(10, 2 * self.sweep_frames + 2):
                 del self._tracks[track_id]
         return self._merge_person_fragments(result)
 
-    def active(self, max_missed: int = 3) -> list[Track]:
+    def active(self, max_missed: int | None = None) -> list[Track]:
         """Keep a tile's last observation visible until its next sweep."""
+        if max_missed is None:
+            max_missed = self.hold_frames
         return [track for track in self._tracks.values()
                 if track.last_observation is not None and track.missed <= max_missed]
 

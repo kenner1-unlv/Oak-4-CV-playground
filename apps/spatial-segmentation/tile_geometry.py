@@ -1,8 +1,9 @@
-"""Map four high-detail inference quadrants back to full-frame depth/video."""
+"""Map inference tiles back to the full-frame depth and video coordinates."""
 
 from dataclasses import dataclass
 
 import numpy as np
+import cv2
 
 
 @dataclass(frozen=True)
@@ -13,16 +14,46 @@ class Tile:
     height: int
 
 
-def quadrants(width: int, height: int) -> tuple[Tile, Tile, Tile, Tile]:
-    if width <= 0 or height <= 0 or width % 2 or height % 2:
-        raise ValueError("the inference canvas must have positive even dimensions")
-    half_w, half_h = width // 2, height // 2
-    return (
-        Tile(0, 0, half_w, half_h),
-        Tile(half_w, 0, half_w, half_h),
-        Tile(0, half_h, half_w, half_h),
-        Tile(half_w, half_h, half_w, half_h),
-    )
+def tiles_for_grid(width: int, height: int, grid_size: int) -> tuple[Tile, ...]:
+    if (width <= 0 or height <= 0 or grid_size < 2 or grid_size > 4 or
+            width % grid_size or height % grid_size):
+        raise ValueError("canvas dimensions must divide into 2–4 grid cells")
+    tile_w, tile_h = width // grid_size, height // grid_size
+    return tuple(Tile(col * tile_w, row * tile_h, tile_w, tile_h)
+                 for row in range(grid_size) for col in range(grid_size))
+
+
+def quadrants(width: int, height: int) -> tuple[Tile, ...]:
+    return tiles_for_grid(width, height, 2)
+
+
+def paired_crops(
+    canvas_size: tuple[int, int], model_size: tuple[int, int],
+    scale: float = 1.5,
+) -> tuple[Tile, Tile]:
+    """Two overlapping left/right landscape crops, centered vertically."""
+    if scale not in (1.5, 1.75):
+        raise ValueError("paired scale must be 1.5 or 1.75")
+    canvas_w, canvas_h = canvas_size
+    tile_w, tile_h = (round(model_size[0] * scale),
+                      round(model_size[1] * scale))
+    if tile_w > canvas_w or tile_h > canvas_h:
+        raise ValueError("paired crop exceeds the inference canvas")
+    y = (canvas_h - tile_h) // 2
+    return (Tile(0, y, tile_w, tile_h),
+            Tile(canvas_w - tile_w, y, tile_w, tile_h))
+
+
+def depth_region_bounds(
+    tile: Tile, canvas_size: tuple[int, int], depth_size: tuple[int, int]
+) -> tuple[int, int, int, int]:
+    canvas_w, canvas_h = canvas_size
+    depth_w, depth_h = depth_size
+    x0 = round(tile.x * depth_w / canvas_w)
+    y0 = round(tile.y * depth_h / canvas_h)
+    x1 = round((tile.x + tile.width) * depth_w / canvas_w)
+    y1 = round((tile.y + tile.height) * depth_h / canvas_h)
+    return x0, y0, x1, y1
 
 
 def remap_box(
@@ -43,17 +74,16 @@ def mask_and_points_for_tile(
     mask: np.ndarray, points_mm: np.ndarray, tile: Tile,
     canvas_size: tuple[int, int],
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Downsample a tile mask onto the corresponding full-frame depth region."""
-    canvas_w, canvas_h = canvas_size
+    """Downsample a tile mask onto its RGB-aligned depth region."""
     depth_h, depth_w = points_mm.shape[:2]
-    if canvas_w != 2 * depth_w or canvas_h != 2 * depth_h:
-        raise ValueError("canvas and organized point cloud must have 2:1 scale")
-    if mask.shape != (tile.height, tile.width):
-        raise ValueError("mask shape does not match inference tile")
-    if any(value % 2 for value in (tile.x, tile.y, tile.width, tile.height)):
-        raise ValueError("tile bounds must align to depth pixels")
-    x0, y0 = tile.x // 2, tile.y // 2
-    w, h = tile.width // 2, tile.height // 2
-    region = points_mm[y0 : y0 + h, x0 : x0 + w]
-    reduced_mask = mask.astype(bool).reshape(h, 2, w, 2).any(axis=(1, 3))
+    if mask.ndim != 2 or not mask.size:
+        raise ValueError("segmentation mask must be a nonempty 2D image")
+    x0, y0, x1, y1 = depth_region_bounds(
+        tile, canvas_size, (depth_w, depth_h)
+    )
+    if x1 <= x0 or y1 <= y0:
+        raise ValueError("tile does not cover a depth pixel")
+    region = points_mm[y0:y1, x0:x1]
+    reduced_mask = cv2.resize(mask.astype(np.float32), (x1 - x0, y1 - y0),
+                              interpolation=cv2.INTER_AREA) > 0.08
     return reduced_mask, region

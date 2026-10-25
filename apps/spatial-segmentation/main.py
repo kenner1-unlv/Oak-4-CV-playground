@@ -14,17 +14,21 @@ from depthai_nodes.utils import AnnotationHelper
 
 from hud import rounded_brackets, target_lines
 from model_controls import (IRProjectorControl, MonoFrameStore, SceneState,
-                            start_control_server)
+                            ZoomControl, start_control_server)
 from mono_projection import project_point
 from perception_core import Observation, SpatialEstimate, TrackManager, estimate_spatial
-from tile_geometry import mask_and_points_for_tile, quadrants, remap_box
+from tile_geometry import (depth_region_bounds, mask_and_points_for_tile,
+                           paired_crops, remap_box, tiles_for_grid, Tile)
 
 
 LOG = logging.getLogger("oak4-perception")
 FPS = int(os.getenv("OAK4_FPS", "30"))
+GRID_SIZE = int(os.getenv("OAK4_GRID_SIZE", "2"))
+SCAN_MODE = os.getenv("OAK4_SCAN_MODE", "full").strip().lower()
+PAIR_SCALE = float(os.getenv("OAK4_PAIR_SCALE", "1.5"))
 STEREO_SIZE = (640, 400)
-VIDEO_SCALE = int(os.getenv("OAK4_VIDEO_SCALE", "3"))
-VIDEO_BITRATE_KBPS = int(os.getenv("OAK4_VIDEO_BITRATE_KBPS", "20000"))
+VIDEO_SCALE = int(os.getenv("OAK4_VIDEO_SCALE", "4"))
+VIDEO_BITRATE_KBPS = int(os.getenv("OAK4_VIDEO_BITRATE_KBPS", "60000"))
 MODEL_YAML = Path(__file__).parent / "models/yolov8_seg_large.RVC4.yaml"
 
 
@@ -62,6 +66,7 @@ class ResultNode(dai.node.HostNode):
         self.viewer_size = (0, 0)
         self.scene_state: SceneState | None = None
         self.mono_projectors: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self.zoom_tile: Tile | None = None
 
     def build(
         self, detections: dai.Node.Output, point_cloud: dai.Node.Output,
@@ -72,6 +77,11 @@ class ResultNode(dai.node.HostNode):
     ) -> "ResultNode":
         self.labels = labels
         self.tiles = tiles
+        if SCAN_MODE == "zoom":
+            self.zoom_tile = tiles[1]
+        self.tracks = TrackManager(
+            grid_size=GRID_SIZE, sweep_frames=len(tiles)
+        )
         self.canvas_size = canvas_size
         self.viewer_size = viewer_size
         self.scene_state = scene_state
@@ -87,8 +97,16 @@ class ResultNode(dai.node.HostNode):
         self, message: dai.ImgDetections, cloud: dai.PointCloudData,
         tile_message: dai.Buffer,
     ) -> None:
-        tile_id = int(tile_message.getData()[0])
-        tile = self.tiles[tile_id]
+        tile_data = tile_message.getData()
+        tile_id = int(tile_data[0])
+        if len(tile_data) >= 9:
+            bounds = [int(tile_data[i]) | (int(tile_data[i + 1]) << 8)
+                      for i in (1, 3, 5, 7)]
+            tile = Tile(*bounds)
+        else:
+            tile = self.tiles[tile_id]
+        if SCAN_MODE == "zoom" and tile_id == 1:
+            self.zoom_tile = tile
         width, height = cloud.getWidth(), cloud.getHeight()
         if height <= 1:
             LOG.warning("Point cloud is not organized; skipping spatial frame")
@@ -124,7 +142,7 @@ class ResultNode(dai.node.HostNode):
             )
             mask = message.getCvSegmentationMaskByIndex(index)
             outline = ()
-            if mask is None or mask.shape != (tile.height, tile.width):
+            if mask is None or mask.ndim != 2:
                 spatial = SpatialEstimate(None, None, 0.0, None)
             else:
                 reduced, region = mask_and_points_for_tile(
@@ -138,9 +156,12 @@ class ResultNode(dai.node.HostNode):
                 if contours:
                     contour = max(contours, key=cv2.contourArea)
                     contour = cv2.approxPolyDP(contour, 2.0, True)
+                    region_x0, region_y0, _, _ = depth_region_bounds(
+                        tile, self.canvas_size, (width, height)
+                    )
                     outline = tuple(
-                        ((tile.x // 2 + int(x)) / width,
-                         (tile.y // 2 + int(y)) / height)
+                        ((region_x0 + int(x)) / width,
+                         (region_y0 + int(y)) / height)
                         for x, y in contour.reshape(-1, 2)
                     )
             observations.append(
@@ -158,11 +179,23 @@ class ResultNode(dai.node.HostNode):
         assigned = self.tracks.update(observations)
         observed_ids = {track.id for track, _ in assigned}
         annotations = AnnotationHelper()
+        if self.zoom_tile is not None:
+            x0 = self.zoom_tile.x / self.canvas_size[0]
+            y0 = self.zoom_tile.y / self.canvas_size[1]
+            x1 = (self.zoom_tile.x + self.zoom_tile.width) / self.canvas_size[0]
+            y1 = (self.zoom_tile.y + self.zoom_tile.height) / self.canvas_size[1]
+            annotations.draw_polyline(
+                [(x0, y0), (x1, y0), (x1, y1), (x0, y1)],
+                outline_color=(1.0, 0.85, 0.12, 0.8), fill_color=None,
+                thickness=2, closed=True,
+            )
         records = []
         scene_objects = []
         for track in self.tracks.active():
             item = track.last_observation
-            parts = track.recent_parts(self.tracks.frame_number)
+            parts = track.recent_parts(
+                self.tracks.frame_number, max_age=self.tracks.part_max_age
+            )
             if not parts:
                 continue
             label = track.label or (
@@ -262,7 +295,16 @@ class ResultNode(dai.node.HostNode):
             ),
             "objects": records,
         }
-        self.scene_state.publish({**packet_data, "objects": scene_objects})
+        self.scene_state.publish({
+            **packet_data, "objects": scene_objects,
+            "zoom_region_xyxy_norm": (
+                [self.zoom_tile.x / self.canvas_size[0],
+                 self.zoom_tile.y / self.canvas_size[1],
+                 (self.zoom_tile.x + self.zoom_tile.width) / self.canvas_size[0],
+                 (self.zoom_tile.y + self.zoom_tile.height) / self.canvas_size[1]]
+                if self.zoom_tile is not None else None
+            ),
+        })
         if self._udp is not None and self._target is not None:
             packet = json.dumps(packet_data, separators=(",", ":")).encode("utf-8")
             try:
@@ -275,14 +317,28 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     if not 1 <= FPS <= 60 or not 1 <= VIDEO_SCALE <= 6:
         raise ValueError("OAK4_FPS must be 1..60 and OAK4_VIDEO_SCALE must be 1..6")
+    if GRID_SIZE not in (2, 3):
+        raise ValueError("OAK4_GRID_SIZE must be 2 or 3")
+    if SCAN_MODE not in ("grid", "paired", "full", "zoom"):
+        raise ValueError("OAK4_SCAN_MODE must be grid, paired, full, or zoom")
     if not 1000 <= VIDEO_BITRATE_KBPS <= 60000:
         raise ValueError("OAK4_VIDEO_BITRATE_KBPS must be 1000..60000")
     archive = dai.NNArchive(
         dai.getModelFromZoo(dai.NNModelDescription.fromYamlFile(str(MODEL_YAML)))
     )
     model_size = archive.getInputSize()
-    canvas_size = (model_size[0] * 2, model_size[1] * 2)
-    tiles = quadrants(*canvas_size)
+    canvas_size = (model_size[0] * GRID_SIZE, model_size[1] * GRID_SIZE)
+    if SCAN_MODE == "grid":
+        tiles = tiles_for_grid(*canvas_size, GRID_SIZE)
+    elif SCAN_MODE == "paired":
+        tiles = paired_crops(canvas_size, model_size, PAIR_SCALE)
+    elif SCAN_MODE == "zoom":
+        tiles = (Tile(0, 0, *canvas_size),
+                 Tile((canvas_size[0] - model_size[0]) // 2,
+                      (canvas_size[1] - model_size[1]) // 2,
+                      *model_size))
+    else:
+        tiles = (Tile(0, 0, *canvas_size),)
     video_size = (model_size[0] * VIDEO_SCALE, model_size[1] * VIDEO_SCALE)
     if video_size[0] * video_size[1] * FPS > 248_000_000:
         raise ValueError("H.264 output exceeds the encoder pixel-rate limit")
@@ -351,10 +407,25 @@ def main() -> None:
         script = pipeline.create(dai.node.Script)
         script.setScript(f"""
 TILES = {[(t.x, t.y, t.width, t.height) for t in tiles]!r}
+SCAN_MODE = {SCAN_MODE!r}
+ZOOM_W, ZOOM_H = {model_size!r}
+zoom_x, zoom_y = TILES[-1][0], TILES[-1][1]
 index = 0
 while True:
     frame = node.inputs['frame'].get()
-    x, y, w, h = TILES[index]
+    if SCAN_MODE == 'zoom':
+        update = node.inputs['zoom'].tryGet()
+        if update is not None:
+            raw = update.getData()
+            if len(raw) >= 4:
+                zoom_x = int(raw[0]) | (int(raw[1]) << 8)
+                zoom_y = int(raw[2]) | (int(raw[3]) << 8)
+        if index == 0:
+            x, y, w, h = TILES[0]
+        else:
+            x, y, w, h = zoom_x, zoom_y, ZOOM_W, ZOOM_H
+    else:
+        x, y, w, h = TILES[index]
     cfg = ImageManipConfig()
     cfg.addCrop(x, y, w, h)
     cfg.setOutputSize({model_size[0]}, {model_size[1]}, ImageManipConfig.ResizeMode.STRETCH)
@@ -363,16 +434,19 @@ while True:
     cfg.setTimestampDevice(frame.getTimestampDevice())
     cfg.setSequenceNum(frame.getSequenceNum())
     tile_id = Buffer()
-    tile_id.setData([index])
+    tile_id.setData([index, x & 255, x >> 8, y & 255, y >> 8,
+                     w & 255, w >> 8, h & 255, h >> 8])
     tile_id.setTimestamp(frame.getTimestamp())
     tile_id.setTimestampDevice(frame.getTimestampDevice())
     tile_id.setSequenceNum(frame.getSequenceNum())
     node.outputs['config'].send(cfg)
     node.outputs['image'].send(frame)
     node.outputs['tile'].send(tile_id)
-    index = (index + 1) % 4
+    index = (index + 1) % {len(tiles)}
 """)
         tile_source.link(script.inputs["frame"])
+        zoom_queue = (script.inputs["zoom"].createInputQueue(maxSize=2,
+                       blocking=False) if SCAN_MODE == "zoom" else None)
         manip = pipeline.create(dai.node.ImageManip)
         manip.inputConfig.setWaitForMessage(True)
         manip.setMaxOutputFrameSize(model_size[0] * model_size[1] * 3)
@@ -404,6 +478,9 @@ while True:
         viewer.addTopic("Tracks and range", results.annotations, "images")
         pipeline.start()
         viewer.registerPipeline(pipeline)
+        zoom_control = (ZoomControl(zoom_queue, dai.Buffer,
+                        canvas_size, model_size)
+                        if zoom_queue is not None else None)
         ir_projector = IRProjectorControl(device)
         try:
             ir_projector.apply({"enabled": True, "intensity": 0.5})
@@ -413,12 +490,13 @@ while True:
         control_server = start_control_server(
             nn.getParser(), parser_config_queue, dai.DetectionParserConfig,
             scene_state, mono_frames, ir_projector, 8082,
+            zoom_control=zoom_control,
         )
         LOG.info(
             "Perception pipeline running: target=%s fps, video=%sx%s, "
-            "bitrate=%s kbps, tile=%sx%s, canvas=%sx%s",
+            "bitrate=%s kbps, scan=%s, tiles=%s, tile_input=%sx%s, canvas=%sx%s",
             FPS, *video_size, VIDEO_BITRATE_KBPS,
-            *model_size, *canvas_size,
+            SCAN_MODE, len(tiles), *model_size, *canvas_size,
         )
         try:
             while pipeline.isRunning():

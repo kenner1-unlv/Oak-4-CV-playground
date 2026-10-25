@@ -42,37 +42,44 @@ commands.
 [Source and deployment guide](apps/spatial-segmentation/README.md) ·
 [architecture and result format](docs/architecture.md)
 
-1. The RGB camera supplies a 1920×1056 H.264 viewer stream at 30 FPS.
-2. A separate 1280×704 inference image is split into four quadrants. One
-   640×352 quadrant is sent to **YOLOv8 Large instance segmentation** each
-   frame, rotating through the image. Each region refreshes about 7.5 times
-   per second at the 30-pass target.
+1. The RGB camera supplies a 2560×1408 H.264 viewer stream at 30 FPS in the
+   House V baseline.
+2. The full 1280×704 inference image is downscaled into the model's fixed
+   640×352 input for **one full-scene pass per frame**. This avoids tile
+   overlap and revisits each target at the 30-pass target rate.
 3. Stereo depth is aligned to RGB. Valid points **inside each instance mask**
    produce camera-relative X/Y/Z and range; poor depth leaves range unknown.
-4. A short-term tracker holds IDs and class evidence between quadrant visits.
-   The viewer shows mask outlines, rounded targeting brackets, and compact
-   labels with model score and depth coverage.
+4. A short-term tracker holds IDs and class evidence through brief missed detections.
+   The viewer shows faint mask outlines, compact segmented reticles colored by
+   camera-relative distance, and target labels.
 5. A House V browser page switches between **Color video**, **Left mono**,
    **Right mono**, and **Detections only**. An independent detection toggle
-   hides or shows overlays on the camera views. Color has full masks and boxes;
-   mono has red target markers projected from calibrated 3D positions.
+   hides or shows overlays on the camera views. Color has mask contours and
+   reticles; mono has projected 3D target reticles. In Color mode, a PiP
+   control swaps the video and spatial field between the main and inset views.
 6. Confidence, IoU suppression, and IR dot-projector controls work live. The
    Orin can consume timestamped JSON results over UDP.
+7. The Orin can relay a sampled Unitree L2 point cloud into the same browser
+   page. Cyan image points are an **uncalibrated preview**; the overhead keeps
+   height-varying LiDAR columns and colors them by horizontal distance. No
+   semantic fusion is claimed yet.
 
-Version **0.5.2** is running and enabled for boot. A 120-frame check delivered
-**30.1 result passes/s**, evenly across the four quadrants. The browser
-displayed both mono cameras and the original color view. Detections only
-removes the video viewer from the page and polls target JSON; a 40-poll sample
-measured **0.473 Mbps of HTTP response payload**. The color video view has
-shown about 37 Mbps in this room. These are runtime checks, not an accuracy
-benchmark. The app does **not** save video or recordings.
+Version **0.8.12** is running and enabled for boot as the spatial preview
+baseline. The earlier v0.5.2 app remains installed for rollback. A
+120-frame check delivered **30.2 full-scene passes/s** with measured ranges.
+The browser offers the House V HUD, mono cameras, and targets-only view.
+See the [L2 relay guide](bridges/README.md) for the Orin cloud path and its
+current alignment limits.
+See the [resolution experiment](docs/resolution-experiment.md) for the tiled
+comparisons and their limits. The app does **not** save video or recordings.
 
 ## Mode 01: detections and camera off
 
 [Source and deployment guide](apps/spatial-segmentation/README.md) ·
 [tracking issue #1](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/1)
 
-This is a browser mode in App 01. It draws red target locks and mask outlines
+This is a browser mode in App 01. It draws distance-colored target reticles
+and mask outlines
 on a dark canvas aligned to the color camera. Selecting it **disconnects the
 H.264 viewer from that browser**, reducing client traffic; the camera sensors,
 model, stereo pipeline, and encoder remain active so switching back to video
@@ -107,6 +114,9 @@ docs/
   architecture.md         Processing graph, records, and limitations
   lab-setup.md            Hardware, network, build, and viewer setup
   experiments.md          Pipeline candidates and evaluation questions
+  resolution-experiment.md  Tested scan patterns and video resolution
+bridges/
+  l2_cloud_relay.py     ROS 2 point-cloud preview for the House V browser
 scripts/
   oak4-result-listener.py UDP inspection and FPS samples on the Orin
   oak4-update.sh          Verify/apply a Luxonis OS OTA on the Orin
@@ -117,19 +127,23 @@ scripts/
 Each new pipeline should live in its own `apps/` directory with a clear task,
 model/depth configuration, sample output, and measured tradeoffs. Candidates
 include better scene geometry, object-centric 3D localization,
-open-vocabulary detection, motion and identity tracking, and eventually
-fusion with a Unitree L2 lidar. See the
+open-vocabulary detection, motion and identity tracking, and calibrated
+fusion with the Unitree L2. The current preview awaits a rigid mount and
+measured camera-to-LiDAR spacing and orientation. See the
 [experiment menu](docs/experiments.md). We will compare candidates against
 labeled scenes and report accuracy, latency, frame rate, and network cost
 before calling any one of them an improvement.
 
 ## Known limits
 
-- A 30 FPS video stream does not mean every pixel is analyzed at 30 Hz; each
-  quadrant is visited about 7.5 times/s.
+- The full scene is processed at 30 passes/s, but the fixed 640×352 model
+  input loses small/far detail when the larger RGB image is downscaled.
 - IDs are short-term associations, not re-identification after long occlusion.
 - Class labels can be wrong, and stereo range can fail on reflective,
   textureless, or occluded regions. The on-screen model score is distinct from
   valid depth coverage.
+- The L2 overlay is unaligned. Its assumed orientation and simple vertical
+  return filter are for visualization; a rigid mount, measured sensor spacing,
+  rotation, and timestamp alignment are pending before point-level labeling.
 - Quantitative detection accuracy, identity stability, distance error, and
   end-to-end latency still need a labeled evaluation set.
