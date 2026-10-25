@@ -48,3 +48,29 @@ shows `L2 OFFLINE`. The L2 toggle only affects browser drawing.
 The current lab driver and relay were started as transient user services.
 They run independently of the Orin's full robot bringup and need to be
 started again after a reboot.
+
+## Provisional Orin identities
+
+`orin_identity.py` listens for the OAK result datagrams on the Orin's wired
+`192.168.50.2:8766` and serves `/identities` on port `8771`. It preserves
+global numbering and identity summaries in `/data/oak4/identity-state.json`.
+House V accesses it through the camera app's same-origin `/api/identities`
+proxy. Camera track IDs can be reattached to a recent global ID using 3D
+distance, image overlap, class, and elapsed time. The restart path allows a
+longer gap only with stricter geometry. A genuinely new ID requires three
+continuous observations spanning at least 0.35 seconds, so short false
+detections do not consume global ID numbers. Matching scores are heuristics, not
+probabilities, and no appearance model is running yet.
+
+Run it on the Orin independently of the full robot bringup:
+
+```bash
+python3 /data/oak4/orin_identity.py
+```
+
+The live lab instance is a transient user service named
+`housev-identity.service`. Its state file survives restarts, but the service
+must be started after an Orin reboot. The **LONGEST IDS** panel shows two
+recent global IDs by accumulated observed time, with YOLO in the first model
+column. The second column remains pending; see
+[issue #2](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/2).

@@ -6,15 +6,28 @@ const spatialHeading = document.querySelector('.map-heading');
 const intelPanel = document.querySelector('.intel-panel');
 const keys = ['confidence', 'iou'];
 const host = location.hostname;
+const trainingMode = location.pathname === '/training';
+document.querySelectorAll('.lab-nav a').forEach(link => {
+  if ((link.getAttribute('href') === '/training') === trainingMode)
+    link.setAttribute('aria-current','page');
+});
+if (trainingMode) {
+  document.title='House V / Training Lab';
+  document.querySelector('.brand small').textContent='TRAINING LAB // OAK 4 D PRO';
+  $('lab-state').textContent='LIVE / NOT RECORDING';
+}
 const viewerUrl = new URL(`${location.protocol}//${host}:8082/viewer/`);
 viewerUrl.searchParams.set('ws_url', `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${host}:8765`);
 
 let mode = null;
 let showLocks = true;
 let viewerFrame = null;
-let colorStage = null;
+let cameraStage = null;
 let pipMain = 'video';
 let latestScene = null;
+let latestIdentities = null;
+let indexMode = 'nearest';
+const smoothedTracks = new Map();
 let latestLidar = null;
 let lastLidarStamp = null;
 const lidarHistory = [];
@@ -51,6 +64,52 @@ for (const key of keys) {
   });
 }
 fetch('/api/model').then(r => r.json()).then(syncModel).catch(() => {});
+
+function syncInference(state) {
+  $('inference-fps').value = state.fps;
+  $('inference-value').value = String(state.fps);
+}
+$('inference-fps').addEventListener('input', () => {
+  $('inference-value').value = $('inference-fps').value;
+});
+$('inference-fps').addEventListener('change', async () => {
+  try { syncInference(await sendJson('/api/inference',
+                                     {fps:Number($('inference-fps').value)})); }
+  catch(error) { setConnection('NN RATE ERROR',false);console.warn(error); }
+});
+fetch('/api/inference').then(r=>r.json()).then(syncInference).catch(()=>{});
+
+function smoothScene(scene) {
+  if(!scene?.objects || scene.device_timestamp_ns == null)return scene;
+  const timestamp=scene.device_timestamp_ns/1e9,now=Date.now();
+  const objects=scene.objects.map(obj=>{
+    const observed=obj.track_state==='tracked';
+    let state=smoothedTracks.get(obj.track_id);
+    if(!state || timestamp<state.timestamp || now-state.seenMs>1500) {
+      state={bbox:[...obj.bbox_xyxy_norm],xyz:obj.xyz_mm?.slice()||null,
+             range:obj.range_m,timestamp,frame:scene.frame_id,seenMs:now};
+      smoothedTracks.set(obj.track_id,state);
+    } else if(observed && state.frame!==scene.frame_id) {
+      const dt=Math.max(0,Math.min(.5,timestamp-state.timestamp));
+      const alpha=Math.max(.08,Math.min(.85,1-Math.exp(-dt/.16)));
+      state.bbox=state.bbox.map((value,i)=>
+        value+alpha*(obj.bbox_xyxy_norm[i]-value));
+      if(obj.range_m!=null)
+        state.range=state.range==null?obj.range_m:
+          state.range+alpha*(obj.range_m-state.range);
+      if(obj.xyz_mm)
+        state.xyz=state.xyz?state.xyz.map((value,i)=>
+          value+alpha*(obj.xyz_mm[i]-value)):obj.xyz_mm.slice();
+      state.timestamp=timestamp;state.frame=scene.frame_id;state.seenMs=now;
+    }
+    return {...obj,bbox_xyxy_norm:state.bbox,
+            range_m:obj.range_m==null?null:state.range,
+            xyz_mm:obj.xyz_mm==null?null:state.xyz};
+  });
+  for(const [id,state] of smoothedTracks)
+    if(now-state.seenMs>1500)smoothedTracks.delete(id);
+  return {...scene,objects};
+}
 
 function syncIR(state) {
   $('ir-toggle').setAttribute('aria-pressed', String(state.enabled));
@@ -141,14 +200,15 @@ function refreshButtons() {
   const on = mode === 'detections' || showLocks;
   $('overlay-toggle').setAttribute('aria-pressed', String(on));
   $('overlay-toggle').textContent = on ? 'LOCKS ON' : 'LOCKS OFF';
-  $('pip-toggle').disabled = mode !== 'color';
+  $('pip-toggle').disabled = mode === 'detections';
   $('pip-toggle').setAttribute('aria-pressed', String(pipMain === 'spatial'));
-  $('pip-toggle').textContent = pipMain === 'video' ? 'SPATIAL MAIN' : 'VIDEO MAIN';
+  $('pip-toggle').textContent = pipMain === 'video' ? 'SPATIAL MAIN' :
+    mode === 'color' ? 'VIDEO MAIN' : 'MONO MAIN';
 }
 function swapPip() {
-  if(mode !== 'color' || !colorStage)return;
+  if(mode === 'detections' || !cameraStage)return;
   pipMain = pipMain === 'video' ? 'spatial' : 'video';
-  colorStage.dataset.main = pipMain;
+  cameraStage.dataset.main = pipMain;
   refreshButtons();
   renderActive();
 }
@@ -178,18 +238,26 @@ function setMode(next) {
     spatialPane.append(caption);
     stage.append(videoPane,spatialPane);view.append(stage);
     intelPanel.classList.add('color-mode');
-    colorStage = stage;viewerFrame = frame;
+    cameraStage = stage;viewerFrame = frame;
   } else if (next === 'left' || next === 'right') {
-    colorStage = null;
-    $('mode-note').textContent = `CAM ${next === 'left' ? 'B' : 'C'} / RAW MONO + PROJECTED 3D LOCKS`;
-    const stage = document.createElement('div'); stage.className = 'mono-stage';
+    $('mode-note').textContent = `CAM ${next === 'left' ? 'B' : 'C'} / MONO + L2 SPATIAL PIP`;
+    const stage = document.createElement('div'); stage.className = 'color-stage';
+    stage.dataset.main = pipMain;
+    const monoPane = document.createElement('div'); monoPane.className = 'mono-pane';
+    monoPane.dataset.label = `${next.toUpperCase()} MONO / PIP`;
     const image = document.createElement('img'); image.alt = `${next} monochrome camera`;
     const overlay = document.createElement('canvas');
     overlay.width = 640; overlay.height = 400;
-    stage.append(image, overlay); view.append(stage);
+    monoPane.append(image, overlay);
+    const spatialPane = document.createElement('div'); spatialPane.className = 'spatial-pane';
+    spatialPane.append(spatialCanvas);
+    const caption = document.createElement('span');caption.className = 'spatial-caption';
+    caption.textContent = 'L2 FIELD // UNCALIBRATED';spatialPane.append(caption);
+    stage.append(monoPane,spatialPane);view.append(stage);
+    intelPanel.classList.add('color-mode');cameraStage=stage;
     loadMono(next, image, monoGeneration);
   } else {
-    colorStage = null;
+    cameraStage = null;
     $('mode-note').textContent = 'RGB FIELD / METADATA ONLY · VIDEO CLIENT DISCONNECTED';
     const stage = document.createElement('div'); stage.className = 'detections-stage';
     const canvas = document.createElement('canvas');
@@ -382,6 +450,14 @@ function drawMonoMarkers(canvas, scene, source) {
     const x=marker[0]*640,y=marker[1]*400;
     const color=rangeColor(obj.range_m);
     drawTargetReticle(ctx,x,y,10,color,obj.track_state==='held');
+    if(trainingMode && obj.mono_evidence?.[source]) {
+      const evidence=obj.mono_evidence[source];
+      const [x0,y0,x1,y1]=evidence.bbox_xyxy_norm;
+      ctx.strokeStyle=evidence.agrees?'#76e4a6':'#ff8c72';
+      ctx.lineWidth=1.5;ctx.setLineDash([5,3]);
+      ctx.strokeRect(x0*640,y0*400,(x1-x0)*640,(y1-y0)*400);
+      ctx.setLineDash([]);
+    }
     const range=obj.range_m==null?'--':`${obj.range_m.toFixed(1)}m`;
     const label=`T${obj.track_id} ${obj.label} ${range}`;
     ctx.font='9px ui-monospace,monospace';const tw=ctx.measureText(label).width;
@@ -448,6 +524,8 @@ function drawSpatialMap(scene) {
 function updateTargetIndex(scene) {
   const list=$('target-list');list.replaceChildren();
   const live=scene?.age_ms!=null&&scene.age_ms<=1200;
+  const identitiesLive=latestIdentities?.age_s!=null&&
+    latestIdentities.age_s<2&&Date.now()-latestIdentities.local_received_ms<2000;
   const objects=live?[...scene.objects].sort((a,b)=>{
     const state=(a.track_state==='tracked'?0:1)-(b.track_state==='tracked'?0:1);
     if(state)return state;
@@ -455,9 +533,46 @@ function updateTargetIndex(scene) {
     const distanceB=Number.isFinite(b.range_m)?b.range_m:Infinity;
     return distanceA-distanceB || b.detector_score-a.detector_score;
   }):[];
-  $('target-count').value=String(objects.length).padStart(2,'0');
+  $('index-title').textContent=indexMode==='nearest'?
+    (trainingMode?'RGB + MONO EVIDENCE':'TARGET INDEX'):'LONGEST IDS / ORIN';
+  $('index-mode').textContent=indexMode==='nearest'?'LONGEST IDS':'NEAREST';
+  $('target-count').value=String(indexMode==='nearest'?objects.length:
+    identitiesLive?latestIdentities.longest_recent.length:0).padStart(2,'0');
   $('range-count').textContent=`RANGE ${objects.filter(o=>o.range_m!=null).length}/${objects.length}`;
   $('scene-age').textContent=live?`AGE ${scene.age_ms}MS`:'AGE --';
+  if(indexMode==='longest') {
+    if(!identitiesLive) {
+      const p=document.createElement('p');p.className='empty';
+      p.textContent='Waiting for Orin identity data…';list.append(p);return;
+    }
+    const table=document.createElement('div');table.className='identity-table';
+    const columns=document.createElement('div');columns.className='identity-columns';
+    for(const heading of ['GLOBAL ID','RGB YOLO',trainingMode?'MONO L / R':'MODEL 2']) {
+      const cell=document.createElement('span');cell.textContent=heading;columns.append(cell);
+    }
+    table.append(columns);
+    for(const identity of latestIdentities.longest_recent) {
+      const row=document.createElement('div');row.className='identity-row';
+      const id=document.createElement('div');id.className='global-id';
+      id.textContent=`G${String(identity.global_id).padStart(3,'0')}`;
+      const duration=document.createElement('small');
+      duration.textContent=`${identity.observed_seconds.toFixed(1)}S SEEN`;
+      id.append(document.createElement('br'),duration);
+      const yolo=document.createElement('div');
+      const label=document.createElement('strong');
+      label.textContent=identity.label.toUpperCase();yolo.append(label);
+      const detail=document.createElement('small');
+      detail.textContent=identity.alternate_label?
+        `NN ${Math.round((identity.detector_score??0)*100)}% · ALT ${identity.alternate_label.toUpperCase()}`:
+        `NN ${identity.detector_score==null?'--':Math.round(identity.detector_score*100)+'%'}`;
+      yolo.append(detail);
+      const second=document.createElement('div');second.className='model-pending';
+      if(trainingMode) second.append(evidenceStrip(identity));
+      else second.textContent='AWAITING MODEL';
+      row.append(id,yolo,second);table.append(row);
+    }
+    list.append(table);return;
+  }
   if(!objects.length){const p=document.createElement('p');p.className='empty';
     p.textContent=live?'No targets in this pass':'Waiting for scene metadata…';list.append(p);return;}
   for(const obj of objects.slice(0,12)) {
@@ -465,15 +580,54 @@ function updateTargetIndex(scene) {
     const color=rangeColor(obj.range_m);card.style.borderLeftColor=color;
     const id=document.createElement('span');id.className='id';
     id.style.color=color;
-    id.textContent=`T${String(obj.track_id).padStart(3,'0')} / ${obj.track_state.toUpperCase()}`;
+    const globalId=identitiesLive?
+      latestIdentities.source_to_global[String(obj.track_id)]:null;
+    id.textContent=(globalId?`G${String(globalId).padStart(3,'0')} / `:'')+
+      `T${String(obj.track_id).padStart(3,'0')} / ${obj.track_state.toUpperCase()}`;
     const range=document.createElement('span');range.className='range';
     range.style.color=color;
     range.textContent=obj.range_m==null?'R --':`${obj.range_m.toFixed(2)} M`;
     const label=document.createElement('span');label.className='label';label.textContent=obj.label;
     const meta=document.createElement('span');meta.className='meta';
     meta.textContent=`NN ${Math.round(obj.detector_score*100)}% · DEPTH ${Math.round(obj.depth_valid_fraction*100)}%`;
-    card.append(id,range,label,meta);list.append(card);
+    card.append(id,range,label,meta);
+    const alternate=document.createElement('span');alternate.className='alternate';
+    alternate.textContent=obj.alternate_label?
+      `ALT ${obj.alternate_label.toUpperCase()} · ${Math.round(obj.alternate_evidence_share*100)}% TEMPORAL EVIDENCE`:
+      'ALT -- · NO COMPETING CLASS YET';
+    card.append(alternate);list.append(card);
+    if(trainingMode) card.append(evidenceStrip(obj));
   }
+}
+function evidenceStrip(obj) {
+  const strip=document.createElement('div');strip.className='evidence-strip';
+  const rgb=document.createElement('span');rgb.className='agree';
+  rgb.textContent=`+ RGB ${obj.label?.toUpperCase()||'--'} ${obj.detector_score==null?'--':Math.round(obj.detector_score*100)+'%'}`;
+  strip.append(rgb);
+  for(const [name,title] of [['left','L'],['right','R']]) {
+    const evidence=obj.mono_evidence?.[name];
+    const cell=document.createElement('span');
+    cell.className=evidence?(evidence.agrees?'agree':'disagree'):'unknown';
+    cell.textContent=evidence?
+      `${evidence.agrees?'+':'−'} ${title} ${evidence.label.toUpperCase()} ${Math.round(evidence.score*100)}%`:
+      `? ${title} NO MATCH`;
+    strip.append(cell);
+  }
+  return strip;
+}
+$('index-mode').addEventListener('click',()=>{
+  indexMode=indexMode==='nearest'?'longest':'nearest';
+  updateTargetIndex(latestScene);
+});
+async function pollIdentities() {
+  try {
+    const response=await fetch('/api/identities',{cache:'no-store'});
+    if(!response.ok)throw new Error(`Identity HTTP ${response.status}`);
+    latestIdentities=await response.json();
+    latestIdentities.local_received_ms=Date.now();
+  } catch(error) {latestIdentities=null;}
+  updateTargetIndex(latestScene);
+  setTimeout(pollIdentities,250);
 }
 
 function renderActive() {
@@ -488,7 +642,9 @@ function renderActive() {
       }
     }
   } else if(mode==='left'||mode==='right') {
-    drawMonoMarkers(view.querySelector('canvas'),latestScene,mode);
+    const canvas=view.querySelector('.mono-pane canvas');
+    if(pipMain==='video')drawMonoMarkers(canvas,latestScene,mode);
+    else canvas?.getContext('2d').clearRect(0,0,640,400);
   } else if(mode==='detections') {
     drawHud(view.querySelector('canvas'),latestScene,true);
     drawLidar(view.querySelector('canvas'));
@@ -496,16 +652,19 @@ function renderActive() {
   updateTargetIndex(latestScene);
   drawSpatialMap(latestScene);
   setConnection(live?'CAMERA LIVE':'NO SCENE DATA',live);
-  $('frame-status').textContent=live?`FRAME ${latestScene.frame_id}`:'FRAME --';
+  $('frame-status').textContent=live?
+    `FRAME ${latestScene.frame_id} · NN ${latestScene.result_fps?.toFixed(1)??'--'}/S`:
+    'FRAME --';
 }
 async function pollTelemetry() {
   try {
     const response=await fetch('/api/scene',{cache:'no-store'});
     if(!response.ok)throw new Error(`HTTP ${response.status}`);
-    latestScene=await response.json();
+    latestScene=smoothScene(await response.json());
   } catch(error) {latestScene=null;console.warn('Scene metadata unavailable',error);}
   renderActive();setTimeout(pollTelemetry,100);
 }
 setMode('color');
 pollTelemetry();
 pollLidar();
+pollIdentities();

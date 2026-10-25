@@ -5,6 +5,13 @@ depth, mask-interior XYZ/range measurements, and short-term target tracking.
 The House V browser page offers four views without changing the camera's
 inference pipeline:
 
+Version 0.9.0 adds two YOLOv6 Nano mono detector passes (same model on left
+and right) to the experimental app. The `/training` page uses the same camera
+views and shows independent RGB/mono agreement or disagreement beside the
+existing Orin global IDs. It does not yet record or train a model; the mono
+votes are matched to RGB tracks by timestamp and projected center, so missing
+evidence stays unknown. The installed 0.8.15 app is the rollback baseline.
+
 | View | Browser data | Detection toggle |
 | --- | --- | --- |
 | Color video | 2560×1408 H.264 in a House V viewer powered by DepthAI; spatial field can be main or PiP | Color-aligned mask contours, segmented reticles, and labels on/off |
@@ -66,11 +73,11 @@ export ORIN_WIRED_IP=192.168.50.2
 mkdir -p /data/oak4/packages
 oakctl app build apps/spatial-segmentation --device "$OAK_DEVICE" \
   --output /data/oak4/packages
-oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-8-12.oakapp \
+oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-9-0.oakapp \
   --device "$OAK_DEVICE" --force-new --start false --enable false \
   --env ORIN_RESULT_HOST="$ORIN_WIRED_IP" --env OAK4_FPS=30 \
   --env OAK4_SCAN_MODE=full --env OAK4_VIDEO_SCALE=4 \
-  --env OAK4_VIDEO_BITRATE_KBPS=60000
+  --env OAK4_VIDEO_BITRATE_KBPS=60000 --env OAK4_MONO_FPS=10
 oakctl app list --format json --device "$OAK_DEVICE"
 oakctl app start APP_ID_FROM_LIST --device "$OAK_DEVICE"
 ```
@@ -78,8 +85,8 @@ oakctl app start APP_ID_FROM_LIST --device "$OAK_DEVICE"
 Close the desktop OAK Viewer before starting this app; both compete for the
 camera pipeline. Confirm all views and the Orin result feed, then use
 `oakctl app enable APP_ID_FROM_LIST --device "$OAK_DEVICE"` for automatic
-start on future boots. The deployed v0.8.12 package on this lab's Orin has
-SHA-256 `7230d73aa5801647f1577a3ce9147ba66a203bb2bd6f2829150a86012ae20cc1`.
+start on future boots. The current v0.8.15 lab trial package has SHA-256
+`e1d5cfca1d846025ef827ac37eea4efe49458e448dc02a526a8e226a46e32c60`.
 
 ## Browser and result checks
 
@@ -94,7 +101,19 @@ Open `http://127.0.0.1:8082/`. The House V HUD uses the Luxonis decoder under
 its color video stage and draws distance-colored target reticles and a spatial panel.
 In Color mode, **SPATIAL MAIN / VIDEO MAIN** swaps the large view and the
 picture-in-picture without recreating the video iframe. The spatial canvas
-returns to the target panel in mono and Detections only modes.
+can likewise swap with either mono camera. It returns to the target panel in
+Detections only mode.
+The **YOLO PASS/S** slider gates inference from 10 to 30 passes/s without
+changing the 30 FPS video. The header reports measured result passes/s. A
+time-based browser filter steadies target position and range across distinct
+frames; it does not change the raw Orin result records. The target index shows
+the strongest competing class and its share of decayed temporal label evidence
+when one exists. This is not a second model probability.
+The nearest list can show Orin global IDs when its service is reachable.
+**LONGEST IDS** switches the panel to the two longest-observed recent Orin
+identities with a live YOLO column. The second model column explicitly remains
+pending. See the [Orin identity guide](../../bridges/README.md) and
+[issue #2](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/2).
 The L2 toggle draws sampled cyan points from the Orin relay via the same-origin
 `/api/lidar` endpoint. This first projection uses an assumed mount orientation
 and field of view. It is explicitly uncalibrated and does not assign semantic
@@ -111,11 +130,16 @@ python3 scripts/oak4-result-listener.py --bind "$ORIN_WIRED_IP" --sample-frames 
 
 ## Verification and limits
 
-- Version `0.8.12` is running and enabled for boot on the lab OAK. The earlier
+- Version `0.8.15` is running and enabled for boot on the lab OAK. The earlier
   spatial, tracker, control, mono JPEG, and projection checks passed on the
   Orin; this update was checked for JavaScript syntax, live reticles, the
   vertical-return overhead, nearest-first target-index ordering, and both PiP
-  directions with the same live video iframe.
+  directions with the same live video iframe. The local trial also passed 28
+  Orin tests, live 10/20/30 passes/s checks, and left/right mono PiP checks.
+  Ten Orin identity tests cover geometric reattachment, simultaneous-track
+  separation, service state, camera restarts, and confirmation of new IDs.
+  Live reattachments are
+  provisional until tested against known object identities.
 - The IR dot command succeeded at 0.50 intensity; live off and on commands
   were accepted. Both mono JPEG endpoints returned distinct grayscale frames.
 - The browser displayed 2560×1408 color video, left/right mono, an independent

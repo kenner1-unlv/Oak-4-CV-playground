@@ -74,6 +74,19 @@ class Track:
         return [observation for seen, observation in self.tile_observations.values()
                 if frame_number - seen <= max_age]
 
+    def alternate_label(self) -> tuple[str, float] | None:
+        """Strongest other class and its share of decayed temporal evidence."""
+        total = sum(max(0.0, score) for score in self.evidence.values())
+        if total <= 0:
+            return None
+        others = [(label, score) for label, score in self.evidence.items()
+                  if label != self.label and score > 0]
+        if not others:
+            return None
+        label, score = max(others, key=lambda item: item[1])
+        share = score / total
+        return (label, share) if share >= 0.02 else None
+
 
 def _iou(a: tuple[float, ...], b: tuple[float, ...]) -> float:
     x0, y0 = max(a[0], b[0]), max(a[1], b[1])
@@ -128,9 +141,20 @@ class TrackManager:
             raise ValueError("sweep_frames must be at least 1")
         self.part_max_age = max(4, self.sweep_frames)
         self.hold_frames = max(3, self.sweep_frames - 1)
+        self.expire_frames = max(10, 2 * self.sweep_frames + 2)
+        self.evidence_decay = 0.9
         self._tracks: dict[int, Track] = {}
         self._next_id = 1
         self._frame_number = 0
+
+    def set_inference_rate(self, fps: int) -> None:
+        """Keep track lifetimes roughly constant in seconds as passes/s changes."""
+        if not 10 <= fps <= 30:
+            raise ValueError("inference fps must be 10..30")
+        self.hold_frames = max(self.sweep_frames - 1, round(0.33 * fps))
+        self.part_max_age = max(4, self.sweep_frames, self.hold_frames + 1)
+        self.expire_frames = max(10, round(1.2 * fps))
+        self.evidence_decay = 0.9 ** (30 / fps)
 
     def _merge_person_fragments(
         self, result: list[tuple[Track, Observation]]
@@ -259,7 +283,7 @@ class TrackManager:
             track.missed = 0
             track.observations += 1
             for label in list(track.evidence):
-                track.evidence[label] *= 0.9
+                track.evidence[label] *= self.evidence_decay
             track.evidence[observation.label] = (
                 track.evidence.get(observation.label, 0.0) + observation.score
             )
@@ -274,7 +298,7 @@ class TrackManager:
                 track.label = best
             result.append((track, observation))
         for track_id in list(self._tracks):
-            if self._tracks[track_id].missed > max(10, 2 * self.sweep_frames + 2):
+            if self._tracks[track_id].missed > self.expire_frames:
                 del self._tracks[track_id]
         return self._merge_person_fragments(result)
 

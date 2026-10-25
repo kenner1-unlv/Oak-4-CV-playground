@@ -107,6 +107,8 @@ An example shape, with illustrative values:
       "label": "chair",
       "detector_label": "chair",
       "detector_score": 0.92,
+      "alternate_label": "couch",
+      "alternate_evidence_share": 0.18,
       "bbox_xyxy_norm": [0.25, 0.5, 0.45, 0.9],
       "xyz_mm": [120, 20, 1850],
       "range_m": 1.854,
@@ -124,6 +126,16 @@ An example shape, with illustrative values:
 is a class/model score; `depth_valid_fraction` and `depth_spread_mm` describe
 depth sampling quality. `track_state` is `tracked` for a direct observation
 in the current pass and `held` for a recent track displayed between passes.
+The alternate class fields are `null` unless the same YOLO model has produced
+another class for that track over time. The evidence share is a decayed vote
+fraction, not a second model probability.
+An independent Orin identity service listens on UDP 8766, assigns provisional
+global IDs from camera-frame 3D proximity, image overlap, class, and elapsed
+time, and serves its current mapping on HTTP 8771. It persists compact state
+under `/data/oak4` so service restarts do not reset global numbering. House V
+proxies that feed and can show the two longest-observed recent IDs; the second
+model column is an explicit placeholder. Geometry-only matching can falsely
+merge lookalike objects, so it is not yet a verified re-identification system.
 The UDP record contains boxes and measurements, **not** image frames or mask
 pixels. Color masks are visualized through the browser annotation topic or
 outline coordinates in the detection-only HTTP scene record. Mono HTTP scene

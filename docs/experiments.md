@@ -60,6 +60,11 @@ ground truth.
 
 ## Candidate apps
 
+The proposed second House V mode, including recording, correction, and
+train/validation/test evaluation, is specified in [Training Lab](training-lab.md).
+Its live RGB/mono detection path and default evidence view are detailed in
+[Mono fusion pipeline](mono-fusion-pipeline.md).
+
 | Pipeline | Question to answer | Evidence to collect |
 | --- | --- | --- |
 | Current spatial segmentation | Which objects are present and where are they in 3D? | Mask quality, class errors, dense-scene recall, range error |

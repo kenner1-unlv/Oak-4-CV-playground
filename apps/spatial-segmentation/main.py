@@ -14,7 +14,9 @@ from depthai_nodes.utils import AnnotationHelper
 
 from hud import rounded_brackets, target_lines
 from model_controls import (IRProjectorControl, MonoFrameStore, SceneState,
-                            ZoomControl, start_control_server)
+                            ZoomControl, InferenceRateControl,
+                            start_control_server)
+from mono_evidence import MonoDetectionStore, match_projected_tracks
 from mono_projection import project_point
 from perception_core import Observation, SpatialEstimate, TrackManager, estimate_spatial
 from tile_geometry import (depth_region_bounds, mask_and_points_for_tile,
@@ -30,6 +32,8 @@ STEREO_SIZE = (640, 400)
 VIDEO_SCALE = int(os.getenv("OAK4_VIDEO_SCALE", "4"))
 VIDEO_BITRATE_KBPS = int(os.getenv("OAK4_VIDEO_BITRATE_KBPS", "60000"))
 MODEL_YAML = Path(__file__).parent / "models/yolov8_seg_large.RVC4.yaml"
+MONO_MODEL_YAML = Path(__file__).parent / "models/yolov6_nano_mono.RVC4.yaml"
+MONO_FPS = int(os.getenv("OAK4_MONO_FPS", "10"))
 
 
 class MonoCaptureNode(dai.node.HostNode):
@@ -44,6 +48,37 @@ class MonoCaptureNode(dai.node.HostNode):
 
     def process(self, frame: dai.ImgFrame) -> None:
         self.store.publish(self.name, np.asarray(frame.getCvFrame()).copy())
+
+
+class MonoDetectionNode(dai.node.HostNode):
+    """Publish actual mono-network results, tagged with their source camera."""
+
+    def build(self, detections: dai.Node.Output, store: MonoDetectionStore,
+              camera: str, labels: list[str]) -> "MonoDetectionNode":
+        self.store = store
+        self.camera = camera
+        self.labels = labels
+        self.link_args(detections)
+        return self
+
+    def process(self, message: dai.ImgDetections) -> None:
+        items = []
+        for detection in message.detections:
+            label = detection.labelName or (
+                self.labels[detection.label]
+                if 0 <= detection.label < len(self.labels)
+                else str(detection.label)
+            )
+            items.append({
+                "label": label.lower(),
+                "score": float(detection.confidence),
+                "bbox_xyxy_norm": [float(detection.xmin),
+                                   float(detection.ymin),
+                                   float(detection.xmax),
+                                   float(detection.ymax)],
+            })
+        timestamp_ns = int(message.getTimestampDevice().total_seconds() * 1e9)
+        self.store.publish(self.camera, timestamp_ns, items)
 
 
 class ResultNode(dai.node.HostNode):
@@ -66,6 +101,7 @@ class ResultNode(dai.node.HostNode):
         self.viewer_size = (0, 0)
         self.scene_state: SceneState | None = None
         self.mono_projectors: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self.mono_detections: MonoDetectionStore | None = None
         self.zoom_tile: Tile | None = None
 
     def build(
@@ -74,6 +110,7 @@ class ResultNode(dai.node.HostNode):
         canvas_size: tuple[int, int], viewer_size: tuple[int, int],
         scene_state: SceneState,
         mono_projectors: dict[str, tuple[np.ndarray, np.ndarray]],
+        mono_detections: MonoDetectionStore,
     ) -> "ResultNode":
         self.labels = labels
         self.tiles = tiles
@@ -82,10 +119,12 @@ class ResultNode(dai.node.HostNode):
         self.tracks = TrackManager(
             grid_size=GRID_SIZE, sweep_frames=len(tiles)
         )
+        self.tracks.set_inference_rate(min(FPS, 30))
         self.canvas_size = canvas_size
         self.viewer_size = viewer_size
         self.scene_state = scene_state
         self.mono_projectors = mono_projectors
+        self.mono_detections = mono_detections
         self.link_args(detections, point_cloud, tile_ids)
         host = os.getenv("ORIN_RESULT_HOST", "").strip()
         if host:
@@ -191,8 +230,10 @@ class ResultNode(dai.node.HostNode):
             )
         records = []
         scene_objects = []
+        projected_tracks = []
         for track in self.tracks.active():
             item = track.last_observation
+            alternate = track.alternate_label()
             parts = track.recent_parts(
                 self.tracks.frame_number, max_age=self.tracks.part_max_age
             )
@@ -260,6 +301,8 @@ class ResultNode(dai.node.HostNode):
                 "label": label,
                 "detector_label": item.label,
                 "detector_score": max(scores),
+                "alternate_label": alternate[0] if alternate else None,
+                "alternate_evidence_share": alternate[1] if alternate else None,
                 "bbox_xyxy_norm": track.bbox,
                 "xyz_mm": xyz_mm,
                 "range_m": range_m,
@@ -269,20 +312,40 @@ class ResultNode(dai.node.HostNode):
                 "age_frames": track.missed,
                 "tile_parts": len(parts),
             }
+            markers = {
+                name: projected
+                for name, (transform, intrinsics) in
+                self.mono_projectors.items()
+                if (projected := project_point(
+                    xyz_mm, transform, intrinsics, STEREO_SIZE
+                )) is not None
+            }
+            projected_tracks.append((track.id, markers))
             records.append(record)
             scene_objects.append({
                 **record,
                 "mask_outlines": [part.mask_outline for part in parts
                                   if len(part.mask_outline) >= 3],
-                "mono_markers": {
-                    name: projected
-                    for name, (transform, intrinsics) in
-                    self.mono_projectors.items()
-                    if (projected := project_point(
-                        xyz_mm, transform, intrinsics, STEREO_SIZE
-                    )) is not None
-                },
+                "mono_markers": markers,
             })
+        device_timestamp_ns = int(
+            message.getTimestampDevice().total_seconds() * 1_000_000_000
+        )
+        mono_frames = self.mono_detections.near(device_timestamp_ns)
+        mono_matches = match_projected_tracks(projected_tracks, mono_frames)
+        for record, scene_object in zip(records, scene_objects):
+            evidence = {}
+            for camera in ("left", "right"):
+                match = mono_matches[record["track_id"]].get(camera)
+                if match is not None:
+                    evidence[camera] = {
+                        **match,
+                        "agrees": match["label"] == record["label"],
+                        "age_ms": round(abs(device_timestamp_ns -
+                                            match["timestamp_ns"]) / 1e6),
+                    }
+            record["mono_evidence"] = evidence
+            scene_object["mono_evidence"] = evidence
         self.annotations.send(
             annotations.build(message.getTimestamp(), message.getSequenceNum())
         )
@@ -290,9 +353,13 @@ class ResultNode(dai.node.HostNode):
             "schema_version": 1,
             "frame_id": message.getSequenceNum(),
             "tile_id": tile_id,
-            "device_timestamp_ns": int(
-                message.getTimestampDevice().total_seconds() * 1_000_000_000
-            ),
+            "device_timestamp_ns": device_timestamp_ns,
+            "mono_model": "yolov6-nano:r2-coco-512x288",
+            "mono_frames": {
+                camera: {"device_timestamp_ns": frame["timestamp_ns"],
+                         "detection_count": len(frame["detections"])}
+                for camera, frame in mono_frames.items()
+            },
             "objects": records,
         }
         self.scene_state.publish({
@@ -315,14 +382,16 @@ class ResultNode(dai.node.HostNode):
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    if not 1 <= FPS <= 60 or not 1 <= VIDEO_SCALE <= 6:
-        raise ValueError("OAK4_FPS must be 1..60 and OAK4_VIDEO_SCALE must be 1..6")
+    if not 10 <= FPS <= 60 or not 1 <= VIDEO_SCALE <= 6:
+        raise ValueError("OAK4_FPS must be 10..60 and OAK4_VIDEO_SCALE must be 1..6")
     if GRID_SIZE not in (2, 3):
         raise ValueError("OAK4_GRID_SIZE must be 2 or 3")
     if SCAN_MODE not in ("grid", "paired", "full", "zoom"):
         raise ValueError("OAK4_SCAN_MODE must be grid, paired, full, or zoom")
     if not 1000 <= VIDEO_BITRATE_KBPS <= 60000:
         raise ValueError("OAK4_VIDEO_BITRATE_KBPS must be 1000..60000")
+    if not 1 <= MONO_FPS <= FPS:
+        raise ValueError("OAK4_MONO_FPS must be 1..OAK4_FPS")
     archive = dai.NNArchive(
         dai.getModelFromZoo(dai.NNModelDescription.fromYamlFile(str(MODEL_YAML)))
     )
@@ -343,8 +412,16 @@ def main() -> None:
     if video_size[0] * video_size[1] * FPS > 248_000_000:
         raise ValueError("H.264 output exceeds the encoder pixel-rate limit")
     labels = archive.getConfig().model.heads[0].metadata.classes
+    mono_archive = dai.NNArchive(
+        dai.getModelFromZoo(
+            dai.NNModelDescription.fromYamlFile(str(MONO_MODEL_YAML))
+        )
+    )
+    mono_labels = mono_archive.getConfig().model.heads[0].metadata.classes
+    mono_size = mono_archive.getInputSize()
     scene_state = SceneState()
     mono_frames = MonoFrameStore()
+    mono_detections = MonoDetectionStore()
     device = dai.Device()
     if device.getPlatform() != dai.Platform.RVC4:
         raise RuntimeError("This app requires an RVC4 camera")
@@ -393,6 +470,25 @@ def main() -> None:
         )
         pipeline.create(MonoCaptureNode).build(mono_left, mono_frames, "left")
         pipeline.create(MonoCaptureNode).build(mono_right, mono_frames, "right")
+        for name, camera in (("left", left), ("right", right)):
+            source = camera.requestOutput(
+                STEREO_SIZE, dai.ImgFrame.Type.GRAY8, fps=MONO_FPS
+            )
+            mono_manip = pipeline.create(dai.node.ImageManip)
+            mono_manip.setMaxOutputFrameSize(
+                mono_size[0] * mono_size[1] * 3
+            )
+            mono_manip.initialConfig.setOutputSize(
+                *mono_size, dai.ImageManipConfig.ResizeMode.STRETCH
+            )
+            mono_manip.initialConfig.setFrameType(dai.ImgFrame.Type.BGR888i)
+            source.link(mono_manip.inputImage)
+            mono_nn = pipeline.create(dai.node.DetectionNetwork).build(
+                mono_manip.out, mono_archive, confidenceThreshold=0.20
+            )
+            pipeline.create(MonoDetectionNode).build(
+                mono_nn.out, mono_detections, name, mono_labels
+            )
         stereo.setLeftRightCheck(True)
         align = pipeline.create(dai.node.ImageAlign)
         stereo.depth.link(align.input)
@@ -408,11 +504,23 @@ def main() -> None:
         script.setScript(f"""
 TILES = {[(t.x, t.y, t.width, t.height) for t in tiles]!r}
 SCAN_MODE = {SCAN_MODE!r}
+SOURCE_FPS = {FPS}
+TARGET_FPS = {min(FPS, 30)}
 ZOOM_W, ZOOM_H = {model_size!r}
 zoom_x, zoom_y = TILES[-1][0], TILES[-1][1]
 index = 0
+phase = 0
 while True:
     frame = node.inputs['frame'].get()
+    rate = node.inputs['rate'].tryGet()
+    if rate is not None:
+        values = rate.getData()
+        if len(values) >= 1:
+            TARGET_FPS = max(10, min(30, int(values[0])))
+    phase += TARGET_FPS
+    if phase < SOURCE_FPS:
+        continue
+    phase -= SOURCE_FPS
     if SCAN_MODE == 'zoom':
         update = node.inputs['zoom'].tryGet()
         if update is not None:
@@ -445,6 +553,8 @@ while True:
     index = (index + 1) % {len(tiles)}
 """)
         tile_source.link(script.inputs["frame"])
+        rate_queue = script.inputs["rate"].createInputQueue(maxSize=2,
+                                                               blocking=False)
         zoom_queue = (script.inputs["zoom"].createInputQueue(maxSize=2,
                        blocking=False) if SCAN_MODE == "zoom" else None)
         manip = pipeline.create(dai.node.ImageManip)
@@ -460,7 +570,7 @@ while True:
         results = pipeline.create(ResultNode).build(
             nn.out, rgbd.pcl, script.outputs["tile"],
             labels, tiles, canvas_size, video_size,
-            scene_state, mono_projectors,
+            scene_state, mono_projectors, mono_detections,
         )
 
         video = color.requestOutput(
@@ -481,6 +591,10 @@ while True:
         zoom_control = (ZoomControl(zoom_queue, dai.Buffer,
                         canvas_size, model_size)
                         if zoom_queue is not None else None)
+        inference_control = InferenceRateControl(
+            rate_queue, dai.Buffer, FPS,
+            on_change=results.tracks.set_inference_rate,
+        )
         ir_projector = IRProjectorControl(device)
         try:
             ir_projector.apply({"enabled": True, "intensity": 0.5})
@@ -491,6 +605,7 @@ while True:
             nn.getParser(), parser_config_queue, dai.DetectionParserConfig,
             scene_state, mono_frames, ir_projector, 8082,
             zoom_control=zoom_control,
+            inference_control=inference_control,
         )
         LOG.info(
             "Perception pipeline running: target=%s fps, video=%sx%s, "

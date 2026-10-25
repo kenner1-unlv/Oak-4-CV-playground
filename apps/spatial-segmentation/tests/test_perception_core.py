@@ -33,6 +33,30 @@ class SpatialTests(unittest.TestCase):
 
 
 class TrackingTests(unittest.TestCase):
+    def test_alternate_label_uses_temporal_class_evidence(self) -> None:
+        manager = TrackManager(sweep_frames=1)
+        spatial = SpatialEstimate((0, 0, 2000), 2.0, 1.0, 0.0)
+        track = None
+        for label in ("cat", "cat", "cat", "dog"):
+            observation = Observation(label, 0.8,
+                                      (0.2, 0.2, 0.4, 0.5), spatial, 0)
+            track, _ = manager.update([observation])[0]
+        self.assertEqual(track.label, "cat")
+        alternate = track.alternate_label()
+        self.assertEqual(alternate[0], "dog")
+        self.assertGreater(alternate[1], 0.1)
+        self.assertLess(alternate[1], 0.5)
+
+    def test_track_hold_duration_scales_with_inference_rate(self) -> None:
+        manager = TrackManager(sweep_frames=1)
+        manager.set_inference_rate(30)
+        self.assertEqual(manager.hold_frames, 10)
+        self.assertEqual(manager.part_max_age, 11)
+        manager.set_inference_rate(10)
+        self.assertEqual(manager.hold_frames, 3)
+        self.assertEqual(manager.part_max_age, 4)
+        self.assertLess(manager.evidence_decay, 0.9)
+
     def test_cat_dog_flip_keeps_identity_and_stable_label(self) -> None:
         manager = TrackManager()
         spatial = SpatialEstimate((0, 0, 2000), 2.0, 1.0, 0.0)

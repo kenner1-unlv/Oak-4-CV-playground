@@ -7,12 +7,14 @@ import math
 import os
 import threading
 import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
 LOG = logging.getLogger("oak4-perception.controls")
 L2_RELAY_HOST = os.environ.get("ORIN_L2_RELAY_HOST", "192.168.50.2")
+IDENTITY_HOST = os.environ.get("ORIN_IDENTITY_HOST", "192.168.50.2")
 PAGE = Path(__file__).with_name("model_controls.html")
 ASSETS = {
     "/housev.css": (Path(__file__).with_name("housev.css"), "text/css"),
@@ -25,17 +27,27 @@ class SceneState:
         self._lock = threading.Lock()
         self._latest: dict = {"frame_id": None, "objects": []}
         self._wall_time = 0.0
+        self._result_times = deque(maxlen=90)
 
     def publish(self, scene: dict) -> None:
         with self._lock:
             self._latest = scene
             self._wall_time = time.monotonic()
+            self._result_times.append(self._wall_time)
 
     def read(self) -> dict:
         with self._lock:
+            now = time.monotonic()
+            recent = [stamp for stamp in self._result_times
+                      if now - stamp <= 1.5]
+            result_fps = ((len(recent) - 1) / (recent[-1] - recent[0])
+                          if len(recent) >= 2 and recent[-1] > recent[0]
+                          else None)
             return {**self._latest,
-                    "age_ms": round((time.monotonic() - self._wall_time) * 1000)
-                    if self._wall_time else None}
+                    "age_ms": round((now - self._wall_time) * 1000)
+                    if self._wall_time else None,
+                    "result_fps": round(result_fps, 1)
+                    if result_fps is not None else None}
 
 
 class MonoFrameStore:
@@ -145,6 +157,39 @@ class ZoomControl:
         return self.read()
 
 
+class InferenceRateControl:
+    """Gate model passes while leaving camera capture and video unchanged."""
+
+    def __init__(self, queue, buffer_factory, video_fps: int,
+                 on_change=None) -> None:
+        self.queue = queue
+        self.buffer_factory = buffer_factory
+        self.video_fps = video_fps
+        self.on_change = on_change
+        self.fps = min(30, video_fps)
+        self.lock = threading.Lock()
+
+    def read(self) -> dict:
+        with self.lock:
+            return {"fps": self.fps, "video_fps": self.video_fps}
+
+    def apply(self, payload: dict) -> dict:
+        if not isinstance(payload, dict) or set(payload) != {"fps"}:
+            raise ValueError("Specify fps")
+        value = payload["fps"]
+        if (isinstance(value, bool) or not isinstance(value, int) or
+                not 10 <= value <= min(30, self.video_fps)):
+            raise ValueError("fps must be an integer from 10 to 30")
+        with self.lock:
+            message = self.buffer_factory()
+            message.setData([value])
+            self.queue.send(message)
+            self.fps = value
+            if self.on_change is not None:
+                self.on_change(value)
+            return {"fps": self.fps, "video_fps": self.video_fps}
+
+
 class ModelControls:
     def __init__(self, parser, config_queue, config_factory) -> None:
         self.values = {
@@ -182,7 +227,8 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                  scene_state: SceneState | None = None,
                  mono_frames: MonoFrameStore | None = None,
                  ir_projector: IRProjectorControl | None = None,
-                 zoom_control: ZoomControl | None = None):
+                 zoom_control: ZoomControl | None = None,
+                 inference_control: InferenceRateControl | None = None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format_string: str, *args) -> None:
             LOG.debug(format_string, *args)
@@ -231,6 +277,19 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                     self.respond(503, b'{"points":[]}', "application/json")
                 finally:
                     upstream.close()
+            elif self.path == "/api/identities":
+                upstream = http.client.HTTPConnection(IDENTITY_HOST, 8771,
+                                                      timeout=2)
+                try:
+                    upstream.request("GET", "/identities")
+                    response = upstream.getresponse()
+                    self.respond(response.status, response.read(), "application/json")
+                except OSError as exc:
+                    LOG.debug("Orin identity service unavailable: %s", exc)
+                    self.respond(503, b'{"longest_recent":[],"source_to_global":{}}',
+                                 "application/json")
+                finally:
+                    upstream.close()
             elif self.path.startswith("/api/mono/") and mono_frames is not None:
                 name = self.path.removeprefix("/api/mono/").split(".")[0]
                 jpeg = mono_frames.jpeg(name)
@@ -244,7 +303,10 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
             elif self.path == "/api/zoom" and zoom_control is not None:
                 self.respond(200, json.dumps(zoom_control.read()).encode(),
                              "application/json")
-            elif self.path in ("/", "/index.html"):
+            elif self.path == "/api/inference" and inference_control is not None:
+                self.respond(200, json.dumps(inference_control.read()).encode(),
+                             "application/json")
+            elif self.path in ("/", "/index.html", "/training"):
                 self.respond(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             elif self.path in ASSETS:
                 path, content_type = ASSETS[self.path]
@@ -253,7 +315,8 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                 self.proxy_viewer()
 
         def do_PUT(self) -> None:
-            if self.path not in ("/api/model", "/api/ir", "/api/zoom"):
+            if self.path not in ("/api/model", "/api/ir", "/api/zoom",
+                                 "/api/inference"):
                 self.respond(404, b"Not found", "text/plain")
                 return
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -270,6 +333,9 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                     result = ir_projector.apply(payload)
                 elif self.path == "/api/zoom" and zoom_control is not None:
                     result = zoom_control.apply(payload)
+                elif (self.path == "/api/inference" and
+                      inference_control is not None):
+                    result = inference_control.apply(payload)
                 else:
                     self.respond(404, b"Not found", "text/plain")
                     return
@@ -288,14 +354,17 @@ def start_control_server(parser, config_queue, config_factory,
                          scene_state: SceneState, mono_frames: MonoFrameStore,
                          ir_projector: IRProjectorControl,
                          port: int,
-                         zoom_control: ZoomControl | None = None) -> ThreadingHTTPServer:
+                         zoom_control: ZoomControl | None = None,
+                         inference_control: InferenceRateControl | None = None
+                         ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer(("0.0.0.0", port),
                                  make_handler(ModelControls(
                                      parser, config_queue, config_factory
                                  ), scene_state=scene_state,
                                  mono_frames=mono_frames,
                                  ir_projector=ir_projector,
-                                 zoom_control=zoom_control))
+                                 zoom_control=zoom_control,
+                                 inference_control=inference_control))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     LOG.info("Live model controls listening on port %s", port)

@@ -64,14 +64,31 @@ commands.
    height-varying LiDAR columns and colors them by horizontal distance. No
    semantic fusion is claimed yet.
 
-Version **0.8.12** is running and enabled for boot as the spatial preview
-baseline. The earlier v0.5.2 app remains installed for rollback. A
+Version **0.8.12** is published on `main` as the spatial preview baseline.
+The earlier v0.5.2 app remains installed for rollback. A
 120-frame check delivered **30.2 full-scene passes/s** with measured ranges.
 The browser offers the House V HUD, mono cameras, and targets-only view.
 See the [L2 relay guide](bridges/README.md) for the Orin cloud path and its
 current alignment limits.
 See the [resolution experiment](docs/resolution-experiment.md) for the tiled
 comparisons and their limits. The app does **not** save video or recordings.
+
+The lab is currently testing **v0.8.15** on the OAK: video remains 30 FPS while
+a live control selects 10–30 YOLO passes/s. Target positions and ranges are
+time-smoothed in the browser; the raw camera measurements remain available in
+the scene and Orin records. Mono and spatial views can now swap main/PiP like
+the color view. The target index shows a competing class only when the single
+YOLO model has supplied temporal evidence for one. The Orin assigns
+provisional global IDs across camera-track churn and the browser can show its
+two longest-observed recent IDs. The second model column is pending model
+selection and object-crop transport. See [issue #2](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/2).
+The v0.8.15 trial is retained as the rollback baseline. A v0.9.0 experiment
+adds a small YOLO detector to each mono feed and a separate
+[Training Lab design](docs/mono-fusion-pipeline.md). Its `/training` page shows
+RGB, left, and right model evidence against the existing Orin IDs while not
+recording. The mono evidence is a geometric first pass, not a trained fused
+probability or completed re-identification model. Recording and training are
+still planned. This experimental branch is not yet on `main`.
 
 ## Mode 01: detections and camera off
 

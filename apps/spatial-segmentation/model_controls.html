@@ -19,11 +19,17 @@
         <span class="separator"></span><span>YOLOV8-L SEG</span>
         <span class="separator"></span><span id="frame-status">FRAME --</span>
       </div>
+      <nav class="lab-nav" aria-label="House V modes">
+        <a href="/">SPATIAL</a><a href="/training">TRAINING LAB</a>
+        <span id="lab-state"></span>
+      </nav>
       <div class="control-cluster">
         <label>CONF <output id="confidence-value">0.25</output>
           <input id="confidence" type="range" min="0" max="1" step="0.01" value="0.25"></label>
         <label>IOU <output id="iou-value">0.50</output>
           <input id="iou" type="range" min="0" max="1" step="0.01" value="0.50"></label>
+        <label>YOLO PASS/S <output id="inference-value">30</output>
+          <input id="inference-fps" type="range" min="10" max="30" step="1" value="30"></label>
         <label>IR DOT <output id="ir-value">0.50</output>
           <input id="ir-intensity" type="range" min="0.05" max="1" step="0.05" value="0.50"></label>
         <button id="ir-toggle" class="chip" aria-pressed="false">IR OFF</button>
@@ -52,7 +58,9 @@
     <div class="workspace">
       <main id="view" aria-label="Camera view"></main>
       <aside class="intel-panel">
-        <div class="panel-heading"><span>TARGET INDEX</span><output id="target-count">00</output></div>
+        <div class="panel-heading"><span id="index-title">TARGET INDEX</span>
+          <button id="index-mode" type="button">LONGEST IDS</button>
+          <output id="target-count">00</output></div>
         <div id="target-list"><p class="empty">Waiting for scene metadata…</p></div>
         <div class="map-heading">SPATIAL FIELD <span>L2 FACES · RED NEAR → CYAN FAR</span></div>
         <canvas id="spatial-map" width="280" height="190" aria-label="Top-down target positions"></canvas>

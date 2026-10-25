@@ -8,7 +8,8 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from model_controls import (IRProjectorControl, ModelControls, MonoFrameStore,
-                            SceneState, ZoomControl, make_handler)
+                            SceneState, ZoomControl, InferenceRateControl,
+                            make_handler)
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -72,16 +73,21 @@ class ModelControlTests(unittest.TestCase):
 
     def test_http_page_and_api(self):
         controls = ModelControls(FakeParser(), FakeQueue(), FakeConfig)
+        rate_queue = FakeQueue()
+        inference = InferenceRateControl(rate_queue, FakeBuffer, 30)
         scene = SceneState()
         scene.publish({"frame_id": 7, "objects": []})
         server = ThreadingHTTPServer(("127.0.0.1", 0),
-                                     make_handler(controls, scene_state=scene))
+                                     make_handler(controls, scene_state=scene,
+                                                  inference_control=inference))
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         base = f"http://127.0.0.1:{server.server_port}"
         try:
             with urlopen(base + "/") as response:
                 self.assertIn(b'id="confidence"', response.read())
+            with urlopen(base + "/training") as response:
+                self.assertIn(b'TRAINING LAB', response.read())
             with urlopen(base + "/housev.css") as response:
                 self.assertIn(b".target-card", response.read())
             with urlopen(base + "/housev.js") as response:
@@ -95,6 +101,24 @@ class ModelControlTests(unittest.TestCase):
                 self.assertEqual(json.load(response)["confidence"], 0.25)
             with urlopen(base + "/api/scene") as response:
                 self.assertEqual(json.load(response)["frame_id"], 7)
+            request = Request(base + "/api/inference", data=b'{"fps":18}',
+                              headers={"Content-Type": "application/json"},
+                              method="PUT")
+            with urlopen(request) as response:
+                self.assertEqual(json.load(response)["fps"], 18)
+            self.assertEqual(rate_queue.sent[-1].data, [18])
+            with urlopen(base + "/api/inference") as response:
+                self.assertEqual(json.load(response),
+                                 {"fps": 18, "video_fps": 30})
+            for bad in (b'{"fps":9}', b'{"fps":31}', b'{"fps":20.5}',
+                        b'{"fps":true}'):
+                invalid = Request(base + "/api/inference", data=bad,
+                                  headers={"Content-Type": "application/json"},
+                                  method="PUT")
+                with self.assertRaises(HTTPError) as error:
+                    urlopen(invalid)
+                self.assertEqual(error.exception.code, 400)
+                error.exception.close()
             invalid = Request(base + "/api/model", data=b'{"iou":2}',
                               headers={"Content-Type": "application/json"},
                               method="PUT")
