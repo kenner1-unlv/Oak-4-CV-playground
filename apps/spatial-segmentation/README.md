@@ -13,6 +13,8 @@ votes are matched to RGB tracks by timestamp and projected center, so missing
 evidence stays unknown. The installed 0.8.15 app is the rollback baseline.
 Version 0.9.1 lets Targets Only and the L2 spatial field swap between the
 main pane and PiP, matching the Color and Mono controls.
+Version 0.9.2 shows object names beside the spatial target dots; IDs remain in
+the target index for track debugging.
 
 The first live v0.9.0 check on 2026-10-25 showed about 30 RGB result passes/s,
 roughly 10 distinct mono result timestamps/s on each side, and actual mono
@@ -23,6 +25,8 @@ color viewer and `/training` route loaded in the browser. The v0.9.0 package
 SHA-256 is `a7583b0b8d76e4482b53cf06a497d533ddf6fe2166722cc6cf9dd493b9920faf`.
 The v0.9.1 package SHA-256 is
 `1fb903e5ec708cba4eaae83949ca2bb7e91f6fb2d9d9ac3bebcd52d356beec07`.
+The v0.9.2 package SHA-256 is
+`403d9aba69c386fda7d7dcc88e82c263027fe66e2d7e71776456f79f0c393795`.
 
 | View | Browser data | Detection toggle |
 | --- | --- | --- |
@@ -85,7 +89,7 @@ export ORIN_WIRED_IP=192.168.50.2
 mkdir -p /data/oak4/packages
 oakctl app build apps/spatial-segmentation --device "$OAK_DEVICE" \
   --output /data/oak4/packages
-oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-9-1.oakapp \
+oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-9-2.oakapp \
   --device "$OAK_DEVICE" --force-new --start false --enable false \
   --env ORIN_RESULT_HOST="$ORIN_WIRED_IP" --env OAK4_FPS=30 \
   --env OAK4_SCAN_MODE=full --env OAK4_VIDEO_SCALE=4 \
@@ -136,14 +140,14 @@ On mono views, the
 independent Detections ON/OFF button controls projected markers. Detections
 only displays targets on a dark canvas and disconnects browser video.
 
-To return to v0.9.0, stop and disable v0.9.1, then start and enable the
-retained v0.9.0 app:
+To return to v0.9.1, stop and disable v0.9.2, then start and enable the
+retained v0.9.1 app:
 
 ```bash
-oakctl app disable 27a99eee-737f-471a-8acb-ed71cd6bcb19 --device "$OAK_DEVICE"
-oakctl app stop 27a99eee-737f-471a-8acb-ed71cd6bcb19 --device "$OAK_DEVICE"
-oakctl app start bb056c6f-7f2c-4960-9259-ec956beeba84 --device "$OAK_DEVICE"
-oakctl app enable bb056c6f-7f2c-4960-9259-ec956beeba84 --device "$OAK_DEVICE"
+oakctl app disable 718f1779-85b0-4290-96bd-e6a34bc3341f --device "$OAK_DEVICE"
+oakctl app stop 718f1779-85b0-4290-96bd-e6a34bc3341f --device "$OAK_DEVICE"
+oakctl app start 27a99eee-737f-471a-8acb-ed71cd6bcb19 --device "$OAK_DEVICE"
+oakctl app enable 27a99eee-737f-471a-8acb-ed71cd6bcb19 --device "$OAK_DEVICE"
 ```
 
 The older v0.8.15 app (`4aa3b087-aa3c-456e-882e-e2dd3370c87f`)
@@ -160,7 +164,7 @@ python3 scripts/oak4-result-listener.py --bind "$ORIN_WIRED_IP" --sample-frames 
 
 ## Verification and limits
 
-- Version `0.9.1` is running and enabled for boot on the lab OAK. Version
+- Version `0.9.2` is running and enabled for boot on the lab OAK. Version
   `0.8.15` remains installed and disabled for rollback. In the v0.9.0 trial,
   30 camera tests and 10 Orin identity tests passed; the live scene carried
   current mono detections and the Orin response carried matching evidence.

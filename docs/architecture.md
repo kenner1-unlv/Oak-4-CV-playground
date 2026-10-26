@@ -86,6 +86,8 @@ transitioning through orange, yellow, and green to cyan at 8 m or farther.
 The target index places tracked objects first, nearest to farthest; held and
 unknown-range records follow. These visual ranges are not yet transformed to
 the robot base frame.
+The spatial map labels target dots by object class; track and global IDs remain
+in the target index.
 This is an approximate, uncalibrated projection with an assumed mount
 orientation and field of view. The L2 points are not associated with masks,
 assigned object labels, or included in the camera's UDP result records.

@@ -82,7 +82,7 @@ YOLO model has supplied temporal evidence for one. The Orin assigns
 provisional global IDs across camera-track churn and the browser can show its
 two longest-observed recent IDs. The second model column is pending model
 selection and object-crop transport. See [issue #2](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/2).
-The v0.8.15 app is retained as the rollback baseline. The running v0.9.1 experiment
+The v0.8.15 app is retained as the rollback baseline. The running v0.9.2 experiment
 adds a small YOLO detector to each mono feed and a separate
 [Training Lab design](docs/mono-fusion-pipeline.md). Its `/training` page shows
 RGB, left, and right model evidence against the existing Orin IDs while not
@@ -92,6 +92,7 @@ still planned. The trial measured about 30 RGB result passes/s and roughly
 10 passes/s for each mono view. This experimental branch is not yet on `main`.
 Version 0.9.1 also lets Targets Only swap with the L2 spatial field as
 main view or PiP while leaving browser video disconnected.
+Version 0.9.2 labels spatial target dots with object names instead of track IDs.
 
 ## Mode 01: detections and camera off
 

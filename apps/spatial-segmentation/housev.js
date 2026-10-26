@@ -525,8 +525,15 @@ function drawSpatialMap(scene) {
     if(px<5||px>W-5||py<5||py>H-10)continue;
     ctx.fillStyle=rangeColor(obj.range_m);ctx.beginPath();
     ctx.arc(px,py,H>300?5:3,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle='#9fd4df';ctx.font=`${Math.max(9,Math.round(H/35))}px ui-monospace,monospace`;
-    ctx.fillText(String(obj.track_id),px+5,py-3);
+    const name=String(obj.label||'OBJECT').toUpperCase();
+    const fontSize=Math.max(9,Math.round(H/35));
+    ctx.font=`${fontSize}px ui-monospace,monospace`;
+    const textWidth=ctx.measureText(name).width;
+    const tx=Math.min(Math.max(3,px+6),W-textWidth-4);
+    const ty=Math.max(fontSize+2,py-4);
+    ctx.fillStyle='rgba(4,18,28,.82)';
+    ctx.fillRect(tx-2,ty-fontSize,textWidth+4,fontSize+3);
+    ctx.fillStyle='#d3edf1';ctx.fillText(name,tx,ty);
   }
 }
 
