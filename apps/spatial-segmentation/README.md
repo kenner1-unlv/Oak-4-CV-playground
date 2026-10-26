@@ -11,6 +11,8 @@ views and shows independent RGB/mono agreement or disagreement beside the
 existing Orin global IDs. It does not yet record or train a model; the mono
 votes are matched to RGB tracks by timestamp and projected center, so missing
 evidence stays unknown. The installed 0.8.15 app is the rollback baseline.
+Version 0.9.1 lets Targets Only and the L2 spatial field swap between the
+main pane and PiP, matching the Color and Mono controls.
 
 The first live v0.9.0 check on 2026-10-25 showed about 30 RGB result passes/s,
 roughly 10 distinct mono result timestamps/s on each side, and actual mono
@@ -19,13 +21,15 @@ check found 366 left and 276 right matches across 416 RGB track records;
 these are geometric candidate matches, **not** measured match accuracy. The
 color viewer and `/training` route loaded in the browser. The v0.9.0 package
 SHA-256 is `a7583b0b8d76e4482b53cf06a497d533ddf6fe2166722cc6cf9dd493b9920faf`.
+The v0.9.1 package SHA-256 is
+`1fb903e5ec708cba4eaae83949ca2bb7e91f6fb2d9d9ac3bebcd52d356beec07`.
 
 | View | Browser data | Detection toggle |
 | --- | --- | --- |
 | Color video | 2560×1408 H.264 in a House V viewer powered by DepthAI; spatial field can be main or PiP | Color-aligned mask contours, segmented reticles, and labels on/off |
 | Left mono | On-demand JPEG from the left 640×400 grayscale stereo camera | Projected 3D target reticles on/off |
 | Right mono | On-demand JPEG from the right 640×400 grayscale stereo camera | Projected 3D target reticles on/off |
-| Detections only | JSON target records on a dark, color-camera-aligned canvas | Distance-colored reticles and mask contours are the view |
+| Detections only | JSON target records on a dark, color-camera-aligned canvas; L2 field can be main or PiP | Distance-colored reticles and mask contours are the view |
 
 The mono images have different optical centers and field of view from RGB.
 The app transforms each target's measured RGB-frame 3D point into the selected
@@ -81,7 +85,7 @@ export ORIN_WIRED_IP=192.168.50.2
 mkdir -p /data/oak4/packages
 oakctl app build apps/spatial-segmentation --device "$OAK_DEVICE" \
   --output /data/oak4/packages
-oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-9-0.oakapp \
+oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-9-1.oakapp \
   --device "$OAK_DEVICE" --force-new --start false --enable false \
   --env ORIN_RESULT_HOST="$ORIN_WIRED_IP" --env OAK4_FPS=30 \
   --env OAK4_SCAN_MODE=full --env OAK4_VIDEO_SCALE=4 \
@@ -111,7 +115,8 @@ Open `http://127.0.0.1:8082/training` for the live RGB/mono evidence view.
 In Color mode, **SPATIAL MAIN / VIDEO MAIN** swaps the large view and the
 picture-in-picture without recreating the video iframe. The spatial canvas
 can likewise swap with either mono camera. It returns to the target panel in
-Detections only mode.
+views that do not pair it with the camera. Targets Only now shares the same
+main/PiP control with the spatial field; its browser video remains disconnected.
 The **YOLO PASS/S** slider gates inference from 10 to 30 passes/s without
 changing the 30 FPS video. The header reports measured result passes/s. A
 time-based browser filter steadies target position and range across distinct
@@ -131,15 +136,18 @@ On mono views, the
 independent Detections ON/OFF button controls projected markers. Detections
 only displays targets on a dark canvas and disconnects browser video.
 
-To return to the verified v0.8.15 app, stop and disable v0.9.0, then start
-and enable the retained v0.8.15 app:
+To return to v0.9.0, stop and disable v0.9.1, then start and enable the
+retained v0.9.0 app:
 
 ```bash
-oakctl app disable bb056c6f-7f2c-4960-9259-ec956beeba84 --device "$OAK_DEVICE"
-oakctl app stop bb056c6f-7f2c-4960-9259-ec956beeba84 --device "$OAK_DEVICE"
-oakctl app start 4aa3b087-aa3c-456e-882e-e2dd3370c87f --device "$OAK_DEVICE"
-oakctl app enable 4aa3b087-aa3c-456e-882e-e2dd3370c87f --device "$OAK_DEVICE"
+oakctl app disable 27a99eee-737f-471a-8acb-ed71cd6bcb19 --device "$OAK_DEVICE"
+oakctl app stop 27a99eee-737f-471a-8acb-ed71cd6bcb19 --device "$OAK_DEVICE"
+oakctl app start bb056c6f-7f2c-4960-9259-ec956beeba84 --device "$OAK_DEVICE"
+oakctl app enable bb056c6f-7f2c-4960-9259-ec956beeba84 --device "$OAK_DEVICE"
 ```
+
+The older v0.8.15 app (`4aa3b087-aa3c-456e-882e-e2dd3370c87f`)
+remains installed if the RGB/mono experiment needs a full rollback.
 
 The Orin identity service was updated to carry the per-camera evidence; its
 previous script is retained at `/data/oak4/orin_identity-v0.8.15.py`.
@@ -152,7 +160,7 @@ python3 scripts/oak4-result-listener.py --bind "$ORIN_WIRED_IP" --sample-frames 
 
 ## Verification and limits
 
-- Version `0.9.0` is running and enabled for boot on the lab OAK. Version
+- Version `0.9.1` is running and enabled for boot on the lab OAK. Version
   `0.8.15` remains installed and disabled for rollback. In the v0.9.0 trial,
   30 camera tests and 10 Orin identity tests passed; the live scene carried
   current mono detections and the Orin response carried matching evidence.

@@ -44,9 +44,10 @@ selected. Detections only removes that iframe and polls scene JSON to draw
 distance-colored reticles and faint masks on a dark canvas. The encoder stays
 active in the camera graph
 for fast switching, but H.264 is no longer delivered to that browser.
-Within Color mode, the video iframe and spatial canvas share the main box.
-The PiP control changes their sizes without rebuilding the iframe or its
-WebSocket. Leaving Color mode returns the spatial canvas to the target panel.
+Color, Mono, and Targets Only can each share the main box with the spatial
+canvas. The PiP control swaps pane sizes without rebuilding the color iframe
+or its WebSocket. Targets Only still disconnects the iframe entirely. The
+spatial canvas returns to the target panel when it is not paired with a view.
 Left/right mono views request JPEGs on demand and can show or hide projected
 3D target-center markers. They do not reuse the color masks because the
 cameras have different optical centers, fields of view, and image geometry.

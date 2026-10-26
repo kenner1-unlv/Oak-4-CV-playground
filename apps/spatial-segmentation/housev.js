@@ -200,13 +200,13 @@ function refreshButtons() {
   const on = mode === 'detections' || showLocks;
   $('overlay-toggle').setAttribute('aria-pressed', String(on));
   $('overlay-toggle').textContent = on ? 'LOCKS ON' : 'LOCKS OFF';
-  $('pip-toggle').disabled = mode === 'detections';
   $('pip-toggle').setAttribute('aria-pressed', String(pipMain === 'spatial'));
   $('pip-toggle').textContent = pipMain === 'video' ? 'SPATIAL MAIN' :
-    mode === 'color' ? 'VIDEO MAIN' : 'MONO MAIN';
+    mode === 'color' ? 'VIDEO MAIN' :
+    mode === 'detections' ? 'TARGETS MAIN' : 'MONO MAIN';
 }
 function swapPip() {
-  if(mode === 'detections' || !cameraStage)return;
+  if(!cameraStage)return;
   pipMain = pipMain === 'video' ? 'spatial' : 'video';
   cameraStage.dataset.main = pipMain;
   refreshButtons();
@@ -257,9 +257,11 @@ function setMode(next) {
     intelPanel.classList.add('color-mode');cameraStage=stage;
     loadMono(next, image, monoGeneration);
   } else {
-    cameraStage = null;
-    $('mode-note').textContent = 'RGB FIELD / METADATA ONLY · VIDEO CLIENT DISCONNECTED';
-    const stage = document.createElement('div'); stage.className = 'detections-stage';
+    $('mode-note').textContent = 'RGB TARGETS + L2 SPATIAL PIP · VIDEO CLIENT DISCONNECTED';
+    const stage = document.createElement('div'); stage.className = 'color-stage';
+    stage.dataset.main = pipMain;
+    const detectionsPane = document.createElement('div');
+    detectionsPane.className = 'detections-pane';
     const canvas = document.createElement('canvas');
     canvas.width = 1920; canvas.height = 1056;
     canvas.setAttribute('aria-label', 'Detection-only target view');
@@ -269,7 +271,14 @@ function setMode(next) {
       updateZoom({center_x: (event.clientX - rect.left) / rect.width,
                   center_y: (event.clientY - rect.top) / rect.height});
     });
-    stage.append(canvas); view.append(stage);
+    detectionsPane.append(canvas);
+    const spatialPane = document.createElement('div');
+    spatialPane.className = 'spatial-pane';
+    spatialPane.append(spatialCanvas);
+    const caption = document.createElement('span');caption.className = 'spatial-caption';
+    caption.textContent = 'L2 FIELD // UNCALIBRATED';spatialPane.append(caption);
+    stage.append(detectionsPane,spatialPane);view.append(stage);
+    intelPanel.classList.add('color-mode');cameraStage=stage;
   }
   renderActive();
 }
@@ -646,8 +655,9 @@ function renderActive() {
     if(pipMain==='video')drawMonoMarkers(canvas,latestScene,mode);
     else canvas?.getContext('2d').clearRect(0,0,640,400);
   } else if(mode==='detections') {
-    drawHud(view.querySelector('canvas'),latestScene,true);
-    drawLidar(view.querySelector('canvas'));
+    const canvas=view.querySelector('.detections-pane canvas');
+    drawHud(canvas,latestScene,true);
+    drawLidar(canvas);
   }
   updateTargetIndex(latestScene);
   drawSpatialMap(latestScene);
