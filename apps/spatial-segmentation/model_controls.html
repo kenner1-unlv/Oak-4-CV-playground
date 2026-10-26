@@ -20,7 +20,8 @@
         <span class="separator"></span><span id="frame-status">FRAME --</span>
       </div>
       <nav class="lab-nav" aria-label="House V modes">
-        <a href="/">SPATIAL</a><a href="/training">TRAINING LAB</a>
+        <button type="button" data-lab-mode="spatial" aria-pressed="true">VISION LAB</button>
+        <button type="button" data-lab-mode="training" aria-pressed="false">TRAINING LAB</button>
         <span id="lab-state"></span>
       </nav>
       <div class="control-cluster">
@@ -46,6 +47,7 @@
       <button id="overlay-toggle" aria-pressed="true">LOCKS ON</button>
       <button id="lidar-toggle" aria-pressed="true">L2 POINTS ON</button>
       <button id="pip-toggle" aria-pressed="false">SPATIAL MAIN</button>
+      <button id="video-reconnect" type="button" hidden>RECONNECT RGB</button>
       <span id="lidar-status" class="lidar-status">L2 CONNECTING · UNCALIBRATED</span>
       <div id="zoom-controls" hidden>
         <span class="mode-label">ZOOM ROI</span>

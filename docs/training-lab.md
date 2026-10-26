@@ -86,10 +86,10 @@ the live detector.
 
 ## Implementation boundary
 
-Mode 1's OAK app is the source of current RGB detections, stereo range, and
-camera views. The first Training Lab increment should add an Orin recording
-service and a separate `/training` viewer route that consumes the same live
-scene feed. Left/right mono detections, dataset review, fusion training, and
-RL policy training are successive increments, each gated by recorded evidence
-and measured performance. No training or mono YOLO inference is implemented by
-this design document.
+The single House V page already switches between Vision Lab and Training Lab
+without rebuilding the camera viewer. The OAK supplies RGB detections, stereo
+range, left/right mono detections, and camera views. The next Training Lab
+increment should add an Orin recording service and review controls to this
+same page. Dataset review, fusion training, and RL policy training are later
+increments, each gated by recorded evidence and measured performance. No
+recording or learning is running in the current app.

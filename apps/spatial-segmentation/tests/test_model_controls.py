@@ -88,6 +88,7 @@ class ModelControlTests(unittest.TestCase):
                 self.assertIn(b'id="confidence"', response.read())
             with urlopen(base + "/training") as response:
                 self.assertIn(b'TRAINING LAB', response.read())
+                self.assertEqual(response.geturl(), base + "/#training")
             with urlopen(base + "/housev.css") as response:
                 self.assertIn(b".target-card", response.read())
             with urlopen(base + "/housev.js") as response:

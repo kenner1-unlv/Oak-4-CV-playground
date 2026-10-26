@@ -306,7 +306,13 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
             elif self.path == "/api/inference" and inference_control is not None:
                 self.respond(200, json.dumps(inference_control.read()).encode(),
                              "application/json")
-            elif self.path in ("/", "/index.html", "/training"):
+            elif self.path == "/training":
+                self.send_response(302)
+                self.send_header("Location", "/#training")
+                self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+            elif self.path in ("/", "/index.html"):
                 self.respond(200, PAGE.read_bytes(), "text/html; charset=utf-8")
             elif self.path in ASSETS:
                 path, content_type = ASSETS[self.path]

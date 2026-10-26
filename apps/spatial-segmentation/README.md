@@ -6,7 +6,7 @@ The House V browser page offers four views without changing the camera's
 inference pipeline:
 
 Version 0.9.0 adds two YOLOv6 Nano mono detector passes (same model on left
-and right) to the experimental app. The `/training` page uses the same camera
+and right) to the experimental app. The Training Lab view uses the same camera
 views and shows independent RGB/mono agreement or disagreement beside the
 existing Orin global IDs. It does not yet record or train a model; the mono
 votes are matched to RGB tracks by timestamp and projected center, so missing
@@ -15,6 +15,9 @@ Version 0.9.1 lets Targets Only and the L2 spatial field swap between the
 main pane and PiP, matching the Color and Mono controls.
 Version 0.9.2 shows object names beside the spatial target dots; IDs remain in
 the target index for track debugging.
+Version 0.9.3 uses one browser page for both lab panels and provides a manual
+and bounded automatic RGB viewer reconnect. Hidden browser tabs release their
+video connection and slow their metadata polling.
 
 The first live v0.9.0 check on 2026-10-25 showed about 30 RGB result passes/s,
 roughly 10 distinct mono result timestamps/s on each side, and actual mono
@@ -27,6 +30,8 @@ The v0.9.1 package SHA-256 is
 `1fb903e5ec708cba4eaae83949ca2bb7e91f6fb2d9d9ac3bebcd52d356beec07`.
 The v0.9.2 package SHA-256 is
 `403d9aba69c386fda7d7dcc88e82c263027fe66e2d7e71776456f79f0c393795`.
+The v0.9.3 package SHA-256 is
+`86d164b1ac1591ce3e5fc7cc03b5add8f2bdc13ecfc1c53411c0262d06f88abe`.
 
 | View | Browser data | Detection toggle |
 | --- | --- | --- |
@@ -89,7 +94,7 @@ export ORIN_WIRED_IP=192.168.50.2
 mkdir -p /data/oak4/packages
 oakctl app build apps/spatial-segmentation --device "$OAK_DEVICE" \
   --output /data/oak4/packages
-oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-9-2.oakapp \
+oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-9-3.oakapp \
   --device "$OAK_DEVICE" --force-new --start false --enable false \
   --env ORIN_RESULT_HOST="$ORIN_WIRED_IP" --env OAK4_FPS=30 \
   --env OAK4_SCAN_MODE=full --env OAK4_VIDEO_SCALE=4 \
@@ -115,7 +120,12 @@ ssh -N -L 127.0.0.1:8082:192.168.50.60:8082 -L 127.0.0.1:8765:192.168.50.60:8765
 
 Open `http://127.0.0.1:8082/`. The House V HUD uses the Luxonis decoder under
 its color video stage and draws distance-colored target reticles and a spatial panel.
-Open `http://127.0.0.1:8082/training` for the live RGB/mono evidence view.
+Select **TRAINING LAB** in `http://127.0.0.1:8082/` for the live RGB/mono
+evidence view. This switches the panel in place without opening a second
+browser video connection. Old `/training` links redirect to `/#training`.
+The color iframe is mounted only while the Color source is visible. Hidden
+tabs release it; **RECONNECT RGB** or reselecting Color reloads only the
+viewer if its frames stall while the scene feed remains live.
 In Color mode, **SPATIAL MAIN / VIDEO MAIN** swaps the large view and the
 picture-in-picture without recreating the video iframe. The spatial canvas
 can likewise swap with either mono camera. It returns to the target panel in
@@ -140,14 +150,14 @@ On mono views, the
 independent Detections ON/OFF button controls projected markers. Detections
 only displays targets on a dark canvas and disconnects browser video.
 
-To return to v0.9.1, stop and disable v0.9.2, then start and enable the
-retained v0.9.1 app:
+To return to v0.9.2, stop and disable v0.9.3, then start and enable the
+retained v0.9.2 app:
 
 ```bash
-oakctl app disable 718f1779-85b0-4290-96bd-e6a34bc3341f --device "$OAK_DEVICE"
-oakctl app stop 718f1779-85b0-4290-96bd-e6a34bc3341f --device "$OAK_DEVICE"
-oakctl app start 27a99eee-737f-471a-8acb-ed71cd6bcb19 --device "$OAK_DEVICE"
-oakctl app enable 27a99eee-737f-471a-8acb-ed71cd6bcb19 --device "$OAK_DEVICE"
+oakctl app disable 8c695a52-ee96-47a2-8157-46513cfa989a --device "$OAK_DEVICE"
+oakctl app stop 8c695a52-ee96-47a2-8157-46513cfa989a --device "$OAK_DEVICE"
+oakctl app start 718f1779-85b0-4290-96bd-e6a34bc3341f --device "$OAK_DEVICE"
+oakctl app enable 718f1779-85b0-4290-96bd-e6a34bc3341f --device "$OAK_DEVICE"
 ```
 
 The older v0.8.15 app (`4aa3b087-aa3c-456e-882e-e2dd3370c87f`)
@@ -164,7 +174,7 @@ python3 scripts/oak4-result-listener.py --bind "$ORIN_WIRED_IP" --sample-frames 
 
 ## Verification and limits
 
-- Version `0.9.2` is running and enabled for boot on the lab OAK. Version
+- Version `0.9.3` is running and enabled for boot on the lab OAK. Version
   `0.8.15` remains installed and disabled for rollback. In the v0.9.0 trial,
   30 camera tests and 10 Orin identity tests passed; the live scene carried
   current mono detections and the Orin response carried matching evidence.

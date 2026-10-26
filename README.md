@@ -7,8 +7,8 @@ House V is the browser interface for comparing views and models. This is an
 experimental portfolio project: labels, distances, and IDs still need
 labeled-scene evaluation.
 
-**Current release:** v0.9.2 runs on the OAK and is enabled for boot. The
-tested v0.9.1 and v0.8.15 apps remain installed for rollback. The two browser
+**Current release:** v0.9.3 runs on the OAK and is enabled for boot. The
+tested v0.9.2 and v0.8.15 apps remain installed for rollback. The two browser
 modes below share one installed camera pipeline. They are different ways to
 inspect its results, not independently deployed apps.
 
@@ -34,8 +34,9 @@ attempted across camera track churn, not a confidence score.
 
 ## Mode 2 — Training Lab
 
-The [Training Lab view](http://127.0.0.1:8082/training) uses the same camera
-and PiP controls. It adds independent YOLOv6 Nano detections on the left and
+The Training Lab tab in the [same House V page](http://127.0.0.1:8082/)
+uses the same camera and PiP controls without opening another viewer. It adds
+independent YOLOv6 Nano detections on the left and
 right mono cameras. The target index shows `+` when a geometrically matched
 mono detection names the same class as RGB, `−` when it names a different
 class, and `?` when no current match is available. Raw model scores remain
@@ -133,7 +134,11 @@ WebSocket:
 ssh -N -L 127.0.0.1:8082:192.168.50.60:8082 -L 127.0.0.1:8765:192.168.50.60:8765 sauce@192.168.1.2
 ```
 
-Open `http://127.0.0.1:8082/` or `http://127.0.0.1:8082/training`.
+Open `http://127.0.0.1:8082/` and switch Vision Lab / Training Lab in the
+page header. Switching those panels keeps the current color-video connection;
+Color alone mounts the video viewer, and hidden tabs release it. The
+**RECONNECT RGB** button reloads only the viewer if video frames stop while
+scene results continue. Old `/training` bookmarks redirect to `/#training`.
 Confidence, IoU, and projector settings reset to app defaults on restart.
 
 ## Repository map

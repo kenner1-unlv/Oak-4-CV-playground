@@ -39,8 +39,12 @@ WebSocket on port 8765. Confidence and IoU sliders send
 controls **model non-maxima suppression**; it does not change the tracker's
 separate association threshold. The control values are process state, so they
 reset when the app restarts.
-The House V page creates the color Visualizer only while Color video is
-selected. Detections only removes that iframe and polls scene JSON to draw
+One House V page switches Vision Lab and Training Lab in place. It creates
+the color Visualizer only while Color video is selected in a visible tab.
+Changing the lab panel keeps that viewer connection. Hidden tabs release it,
+and the reconnect control can recreate only the iframe when its image feed
+stalls while scene JSON stays live. Detections only removes the iframe and
+polls scene JSON to draw
 distance-colored reticles and faint masks on a dark canvas. The encoder stays
 active in the camera graph
 for fast switching, but H.264 is no longer delivered to that browser.

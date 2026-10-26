@@ -6,22 +6,16 @@ const spatialHeading = document.querySelector('.map-heading');
 const intelPanel = document.querySelector('.intel-panel');
 const keys = ['confidence', 'iou'];
 const host = location.hostname;
-const trainingMode = location.pathname === '/training';
-document.querySelectorAll('.lab-nav a').forEach(link => {
-  if ((link.getAttribute('href') === '/training') === trainingMode)
-    link.setAttribute('aria-current','page');
-});
-if (trainingMode) {
-  document.title='House V / Training Lab';
-  document.querySelector('.brand small').textContent='TRAINING LAB // OAK 4 D PRO';
-  $('lab-state').textContent='LIVE / NOT RECORDING';
-}
+let trainingMode = location.hash === '#training';
 const viewerUrl = new URL(`${location.protocol}//${host}:8082/viewer/`);
 viewerUrl.searchParams.set('ws_url', `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${host}:8765`);
 
 let mode = null;
 let showLocks = true;
 let viewerFrame = null;
+let viewerStartedAt = 0;
+let viewerRetryAt = 0;
+let viewerRetryCount = 0;
 let cameraStage = null;
 let pipMain = 'video';
 let latestScene = null;
@@ -155,7 +149,32 @@ fetch('/api/zoom').then(response => {
 
 function cleanupViewer() {
   viewerFrame?._houseObserver?.disconnect();
+  if (viewerFrame) {
+    viewerFrame.onload = null;
+    viewerFrame.remove(); // Close the browser's H.264 WebSocket.
+  }
   viewerFrame = null;
+}
+function mountColorViewer() {
+  if (mode !== 'color' || !cameraStage || viewerFrame || document.hidden) return;
+  const pane = cameraStage.querySelector('.video-pane');
+  if (!pane) return;
+  const frame = document.createElement('iframe');
+  frame.title = 'Color camera stream';
+  frame.allow = 'fullscreen';
+  frame.onload = () => { if (frame === viewerFrame) installViewerHud(frame); };
+  const url = new URL(viewerUrl.href);
+  url.searchParams.set('connect', String(Date.now()));
+  frame.src = url.href;
+  viewerFrame = frame;
+  viewerStartedAt = Date.now();
+  pane.replaceChildren(frame);
+}
+function reconnectColorViewer(manual = false) {
+  if (mode !== 'color' || document.hidden) return;
+  if (manual) viewerRetryCount = 0;
+  cleanupViewer();
+  mountColorViewer();
 }
 function installViewerHud(frame) {
   try {
@@ -204,6 +223,7 @@ function refreshButtons() {
   $('pip-toggle').textContent = pipMain === 'video' ? 'SPATIAL MAIN' :
     mode === 'color' ? 'VIDEO MAIN' :
     mode === 'detections' ? 'TARGETS MAIN' : 'MONO MAIN';
+  $('video-reconnect').hidden = mode !== 'color';
 }
 function swapPip() {
   if(!cameraStage)return;
@@ -213,7 +233,10 @@ function swapPip() {
   renderActive();
 }
 function setMode(next) {
-  if (mode === next) return;
+  if (mode === next) {
+    if (next === 'color') reconnectColorViewer(true);
+    return;
+  }
   if (spatialCanvas.parentElement !== intelPanel) spatialHeading.after(spatialCanvas);
   intelPanel.classList.remove('color-mode');
   cleanupViewer();
@@ -226,11 +249,6 @@ function setMode(next) {
     const stage = document.createElement('div'); stage.className = 'color-stage';
     stage.dataset.main = pipMain;
     const videoPane = document.createElement('div'); videoPane.className = 'video-pane';
-    const frame = document.createElement('iframe');
-    frame.title = 'Color camera stream'; frame.allow = 'fullscreen';
-    frame.onload = () => installViewerHud(frame);
-    frame.src = viewerUrl.href;
-    videoPane.append(frame);
     const spatialPane = document.createElement('div'); spatialPane.className = 'spatial-pane';
     spatialPane.append(spatialCanvas);
     const caption = document.createElement('span');caption.className = 'spatial-caption';
@@ -238,7 +256,8 @@ function setMode(next) {
     spatialPane.append(caption);
     stage.append(videoPane,spatialPane);view.append(stage);
     intelPanel.classList.add('color-mode');
-    cameraStage = stage;viewerFrame = frame;
+    cameraStage = stage;
+    mountColorViewer();
   } else if (next === 'left' || next === 'right') {
     $('mode-note').textContent = `CAM ${next === 'left' ? 'B' : 'C'} / MONO + L2 SPATIAL PIP`;
     const stage = document.createElement('div'); stage.className = 'color-stage';
@@ -282,9 +301,49 @@ function setMode(next) {
   }
   renderActive();
 }
+function setLabMode(next, updateUrl = true) {
+  trainingMode = next === 'training';
+  document.title = trainingMode ? 'House V / Training Lab' : 'House V / Vision Lab';
+  document.querySelector('.brand small').textContent =
+    trainingMode ? 'TRAINING LAB // OAK 4 D PRO' : 'VISION LAB // OAK 4 D PRO';
+  $('lab-state').textContent = trainingMode ? 'LIVE / NOT RECORDING' : '';
+  document.querySelectorAll('.lab-nav button[data-lab-mode]').forEach(button =>
+    button.setAttribute('aria-pressed', String(button.dataset.labMode === next)));
+  if (updateUrl) history.replaceState(null, '', trainingMode ? '/#training' : '/');
+  if (mode !== null) renderActive();
+}
+document.querySelectorAll('.lab-nav button[data-lab-mode]').forEach(button =>
+  button.addEventListener('click', () => setLabMode(button.dataset.labMode)));
+window.addEventListener('hashchange', () =>
+  setLabMode(location.hash === '#training' ? 'training' : 'spatial', false));
 document.querySelectorAll('.modebar button[data-mode]').forEach(button =>
   button.addEventListener('click', () => setMode(button.dataset.mode)));
 $('pip-toggle').addEventListener('click',swapPip);
+$('video-reconnect').addEventListener('click', () => reconnectColorViewer(true));
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) cleanupViewer();
+  else mountColorViewer();
+});
+setInterval(() => {
+  if (mode !== 'color' || document.hidden || !viewerFrame ||
+      latestScene?.age_ms == null || latestScene.age_ms > 1200) return;
+  let waiting = false;
+  try {
+    waiting = /Waiting for image frames|Connecting to DepthAI/.test(
+      viewerFrame.contentDocument?.body?.innerText || '');
+  } catch (_error) { /* The manual reconnect remains available. */ }
+  if (viewerFrame._hudCanvas && !waiting) {
+    viewerRetryCount = 0;
+    return;
+  }
+  const now = Date.now();
+  if (now - viewerStartedAt > 8000 && now - viewerRetryAt > 10000 &&
+      viewerRetryCount < 2) {
+    viewerRetryCount++;
+    viewerRetryAt = now;
+    reconnectColorViewer();
+  }
+}, 2000);
 $('overlay-toggle').addEventListener('click', () => {
   if (mode === 'detections') return;
   showLocks = !showLocks;
@@ -344,6 +403,8 @@ function visibleLidarScans(now) {
 }
 
 async function pollLidar() {
+  if (document.hidden) { setTimeout(pollLidar, 1000); return; }
+  let nextPollMs = 100;
   try {
     const response=await fetch('/api/lidar',{cache:'no-store'});
     if(!response.ok)throw new Error(`L2 HTTP ${response.status}`);
@@ -356,13 +417,13 @@ async function pollLidar() {
       lastLidarStamp=scan.stamp_ns;
       latestLidar=scan;
     }
-  } catch(error) { latestLidar=null; }
+  } catch(error) { latestLidar=null; nextPollMs=1000; }
   const live=latestLidar && Date.now()-latestLidar.local_received_ms<1500;
   $('lidar-status').textContent=live ?
     `L2 ${latestLidar.source_points} PTS · UNCALIBRATED` : 'L2 OFFLINE · UNCALIBRATED';
   $('lidar-status').classList.toggle('offline',!live);
   renderActive();
-  setTimeout(pollLidar,100);
+  setTimeout(pollLidar,nextPollMs);
 }
 
 function loadMono(source, image, generation) {
@@ -636,14 +697,16 @@ $('index-mode').addEventListener('click',()=>{
   updateTargetIndex(latestScene);
 });
 async function pollIdentities() {
+  if (document.hidden) { setTimeout(pollIdentities, 1000); return; }
+  let nextPollMs = 250;
   try {
     const response=await fetch('/api/identities',{cache:'no-store'});
     if(!response.ok)throw new Error(`Identity HTTP ${response.status}`);
     latestIdentities=await response.json();
     latestIdentities.local_received_ms=Date.now();
-  } catch(error) {latestIdentities=null;}
+  } catch(error) {latestIdentities=null;nextPollMs=1000;}
   updateTargetIndex(latestScene);
-  setTimeout(pollIdentities,250);
+  setTimeout(pollIdentities,nextPollMs);
 }
 
 function renderActive() {
@@ -674,13 +737,20 @@ function renderActive() {
     'FRAME --';
 }
 async function pollTelemetry() {
+  if (document.hidden) { setTimeout(pollTelemetry, 1000); return; }
+  let nextPollMs = 100;
   try {
     const response=await fetch('/api/scene',{cache:'no-store'});
     if(!response.ok)throw new Error(`HTTP ${response.status}`);
     latestScene=smoothScene(await response.json());
-  } catch(error) {latestScene=null;console.warn('Scene metadata unavailable',error);}
-  renderActive();setTimeout(pollTelemetry,100);
+  } catch(error) {
+    latestScene=null;
+    nextPollMs=1000;
+    console.warn('Scene metadata unavailable',error);
+  }
+  renderActive();setTimeout(pollTelemetry,nextPollMs);
 }
+setLabMode(trainingMode ? 'training' : 'spatial', false);
 setMode('color');
 pollTelemetry();
 pollLidar();
