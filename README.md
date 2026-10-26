@@ -1,23 +1,112 @@
 # OAK 4 CV Playground
 
-A hands-on computer vision lab built around a Luxonis OAK 4 D Pro camera. This
-repository is a home for **separate, installable camera pipelines**: each app
-should answer a specific question, expose its measurements, and document what
-worked in a real scene. The first app combines instance segmentation, stereo
-range, short-term tracking, and a live browser view.
+A hands-on vision lab built around a Luxonis OAK 4 D Pro and a Jetson AGX
+Orin. The camera handles real-time image inference, stereo range, and video;
+the Orin receives compact observations and maintains provisional object IDs.
+House V is the browser interface for comparing views and models. This is an
+experimental portfolio project: labels, distances, and IDs still need
+labeled-scene evaluation.
 
-This is an experimental portfolio project. Detection labels and distances are
-measurements to evaluate, not safety decisions.
+**Current release:** v0.9.2 runs on the OAK and is enabled for boot. The
+tested v0.9.1 and v0.8.15 apps remain installed for rollback. The two browser
+modes below share one installed camera pipeline. They are different ways to
+inspect its results, not independently deployed apps.
+
+## Mode 1 — Vision Lab
+
+The [spatial viewer](http://127.0.0.1:8082/) shows YOLOv8 Large instance
+segmentation, stereo-derived range, short-term tracks, and an unaligned
+Unitree L2 preview. Switch among Color, Left mono, Right mono, and Targets
+Only. Any source can swap with the top-down spatial field between the main
+pane and picture-in-picture (PiP). Targets Only disconnects H.264 delivery to
+that browser while inference and stereo continue on the camera.
+
+![House V Color view with segmentation targets and L2 spatial PiP](docs/images/spatial-vision-lab.png)
+
+The mono views show their own grayscale camera frames and calibration-projected
+RGB target centers. They do not copy RGB masks to a different camera's image.
+
+![House V left mono view with projected target markers and L2 PiP](docs/images/spatial-mono-left.png)
+
+The target index retains the camera track ID (`T`) and Orin provisional global
+ID (`G`) for debugging. Spatial dots use object names. A `G` number is an ID
+attempted across camera track churn, not a confidence score.
+
+## Mode 2 — Training Lab
+
+The [Training Lab view](http://127.0.0.1:8082/training) uses the same camera
+and PiP controls. It adds independent YOLOv6 Nano detections on the left and
+right mono cameras. The target index shows `+` when a geometrically matched
+mono detection names the same class as RGB, `−` when it names a different
+class, and `?` when no current match is available. Raw model scores remain
+separate; the display does **not** calculate a fused probability.
+
+![House V Training Lab with L2 field main, targets PiP, and RGB/mono evidence](docs/images/training-lab-spatial.png)
+
+Screenshots were captured from the live v0.9.2 viewer on 2026-10-26;
+displayed class names are model outputs, not hand-verified labels.
+
+The Orin's current global-ID matcher still relies on RGB track geometry,
+class, and time. The mono matches shown here are candidate evidence. Nearby
+objects and overlapping boxes can create false associations. The page says
+`LIVE / NOT RECORDING` because capture, human corrections, training, and
+train/validation/test evaluation are not implemented yet. The
+[Mode 2 pipeline design](docs/mono-fusion-pipeline.md) describes that work.
+
+## Measured capacity so far
+
+| Path | Current observation | What it establishes |
+| --- | --- | --- |
+| RGB OAK model | YOLOv8 Large segmentation at 640×352 input, about 30 result passes/s in the live room | The present full-scene RGB pipeline sustains its selected rate in this scene. |
+| Mono OAK models | One YOLOv6 Nano stream per 640×400 grayscale camera, resized to 512×288 model input and configured for 10 passes/s each; a 5-second sample saw 47 left and 49 right distinct timestamps | Both additional detector paths run alongside RGB and stereo. This does not measure their class accuracy. |
+| Stereo and video | 640×400 stereo at the 30 FPS camera target; 2560×1408 H.264 at a 30 FPS and 60 Mb/s encoder target | The video bitrate is a configured target, not a constant measured transfer rate. |
+| Orin and network | Compact UDP results to the identity service; Orin `eno1` negotiated 1 Gb/s full duplex to the PoE switch | The wired link carries aggregate traffic. 60 Mb/s is about 6% of nominal 1 Gb/s link speed before overhead and other streams. The wireless bridge is the uplink, not the camera-to-Orin data path. |
+| Unitree L2 | About 12 point clouds/s in an earlier live check; sampled returns are relayed to the browser | The displayed LiDAR field is an uncalibrated preview, not fused object geometry. |
+
+These are throughput observations, **not a measured spare-compute budget**.
+OAK neural, CPU, memory, temperature, and per-stage latency utilization have
+not been profiled with this full pipeline; neither has sustained thermal
+behavior. Browser decoding and Orin processing can also bottleneck a future
+configuration independently of Ethernet bandwidth. Before adding another
+layer, record those metrics and compare RGB/mono pass rates, end-to-end
+latency, dropped frames, and accuracy on the same labeled scenes. Luxonis
+documents RVC4's [neural and vision hardware](https://docs.luxonis.com/hardware/platform/rvc/rvc4),
+but its peak benchmarks are not a measurement of headroom in this app.
+
+## Next experiments
+
+The first Mode 2 follow-up is **cross-camera identity fusion**: preserve every
+RGB/left/right observation, synchronize by source timestamp, reject ambiguous
+matches, and use the evidence to keep one object ID through occlusion and
+camera-track resets. Compare ID switches and false merges against the current
+RGB-only Orin matcher before allowing mono votes to change an identity.
+The [fusion tracking issue](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/2),
+[experiment menu](docs/experiments.md), and [pipeline design](docs/mono-fusion-pipeline.md)
+set out the evaluation plan.
+
+The next vision layer need not be another COCO object detector. Candidates
+with distinct jobs are:
+
+| Candidate | New information | First useful test |
+| --- | --- | --- |
+| [Feature tracking / optical flow](https://docs.luxonis.com/software-v3/depthai/depthai-components/nodes/feature_tracker/) | Motion and stable image features on the mono pair | Do features help reattach an object after a detector drops it? |
+| [Neural stereo depth](https://docs.luxonis.com/software-v3/depthai/examples/neural_depth/neural_depth/) | A learned depth estimate alongside classical stereo | Compare range coverage and error on plain walls, dark fabric, and reflective objects. |
+| [Human pose](https://github.com/luxonis/oak-examples/blob/main/neural-networks/pose-estimation/human-pose/README.md) | Body keypoints rather than another person box | Measure whether pose adds useful orientation or motion cues for people. |
+| Scene surfaces | Floor, wall, and obstacle regions rather than COCO object classes | Build a labeled indoor scene set and compare mask boundaries before semantic LiDAR projection. |
+
+These are options for separate trials, not models claimed to run together
+today. A fixed camera-to-L2 mount, measured transform, and timestamp alignment
+are needed before assigning camera labels to LiDAR points.
 
 ## The lab
 
-| Component | Role | Verified details |
-| --- | --- | --- |
-| Luxonis OAK 4 D Pro AF | Runs the vision pipeline on the camera | RVC4; color autofocus camera, stereo mono pair, IR illumination and dot projector. The unit reports `OAK4-D R9` and Luxonis OS `1.45.0`. [Hardware specifications](https://docs.luxonis.com/hardware/products/OAK%204%20D%20Pro) |
-| NVIDIA Jetson AGX Orin Developer Kit | Build and deployment host; receives compact result records | ARM64 Linux, connected to the camera over wired Ethernet. The model runs on the OAK, not on the Orin. |
-| Linovision POE-SW508G2 | Wired fan-out and PoE power | Eight gigabit RJ45 ports; the installed switch powers the camera and wireless bridge. [Switch specifications](https://support.linovision.com/portal/en/kb/articles/poe-sw508g2) |
-| TRENDnet TEW-821DAP | Wireless uplink for the wired equipment | Configured as a 5 GHz **client bridge** to the existing wireless router. It is not acting as a second access point. [Bridge modes](https://www.trendnet.com/products/product-detail?prod=115_TEW-821DAP) |
-| Development PC | Browser viewer and optional direct Ethernet access | Reaches the Orin over the home network or connects to the wired camera subnet. |
+| Component | Role |
+| --- | --- |
+| [Luxonis OAK 4 D Pro AF](https://docs.luxonis.com/hardware/products/OAK%204%20D%20Pro) | RVC4 camera with RGB, stereo mono pair, IR dot projector; the device reports Luxonis OS 1.45.0. |
+| NVIDIA Jetson AGX Orin Developer Kit | Builds and installs `.oakapp` packages, receives compact result records, and hosts the identity and L2 relays. |
+| Linovision POE-SW508G2 | PoE power and wired gigabit fan-out for the camera, Orin, and bridge. |
+| TRENDnet TEW-821DAP | 5 GHz client bridge from the wired equipment to the existing wireless router. |
+| Development PC | Runs the browser through an SSH tunnel or connects directly to the wired subnet. |
 
 ```mermaid
 flowchart LR
@@ -30,141 +119,42 @@ flowchart LR
   Orin <-->|oakctl / UDP results| Oak
 ```
 
-The bridge gives the wired setup a route to the home network and internet.
-The camera-to-Orin inference/result path stays on Ethernet. The Orin builds
-`.oakapp` packages with `oakctl`, installs them on the OAK, and listens for
-small JSON detection records. The browser can switch between color, both mono
-cameras, and target-only metadata. [Lab setup](docs/lab-setup.md) has the current addressing and access
-commands.
-
-## App 01: spatial segmentation and view modes
-
-[Source and deployment guide](apps/spatial-segmentation/README.md) ·
-[architecture and result format](docs/architecture.md)
-
-1. The RGB camera supplies a 2560×1408 H.264 viewer stream at 30 FPS in the
-   House V baseline.
-2. The full 1280×704 inference image is downscaled into the model's fixed
-   640×352 input for **one full-scene pass per frame**. This avoids tile
-   overlap and revisits each target at the 30-pass target rate.
-3. Stereo depth is aligned to RGB. Valid points **inside each instance mask**
-   produce camera-relative X/Y/Z and range; poor depth leaves range unknown.
-4. A short-term tracker holds IDs and class evidence through brief missed detections.
-   The viewer shows faint mask outlines, compact segmented reticles colored by
-   camera-relative distance, and target labels.
-5. A House V browser page switches between **Color video**, **Left mono**,
-   **Right mono**, and **Detections only**. An independent detection toggle
-   hides or shows overlays on the camera views. Color has mask contours and
-   reticles; mono has projected 3D target reticles. In Color mode, a PiP
-   control swaps the video and spatial field between the main and inset views.
-6. Confidence, IoU suppression, and IR dot-projector controls work live. The
-   Orin can consume timestamped JSON results over UDP.
-7. The Orin can relay a sampled Unitree L2 point cloud into the same browser
-   page. Cyan image points are an **uncalibrated preview**; the overhead keeps
-   height-varying LiDAR columns and colors them by horizontal distance. No
-   semantic fusion is claimed yet.
-
-Version **0.8.12** is published on `main` as the spatial preview baseline.
-The earlier v0.5.2 app remains installed for rollback. A
-120-frame check delivered **30.2 full-scene passes/s** with measured ranges.
-The browser offers the House V HUD, mono cameras, and targets-only view.
-See the [L2 relay guide](bridges/README.md) for the Orin cloud path and its
-current alignment limits.
-See the [resolution experiment](docs/resolution-experiment.md) for the tiled
-comparisons and their limits. The app does **not** save video or recordings.
-
-The lab tested **v0.8.15** on the OAK: video remained 30 FPS while
-a live control selects 10–30 YOLO passes/s. Target positions and ranges are
-time-smoothed in the browser; the raw camera measurements remain available in
-the scene and Orin records. Mono and spatial views can now swap main/PiP like
-the color view. The target index shows a competing class only when the single
-YOLO model has supplied temporal evidence for one. The Orin assigns
-provisional global IDs across camera-track churn and the browser can show its
-two longest-observed recent IDs. The second model column is pending model
-selection and object-crop transport. See [issue #2](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/2).
-The v0.8.15 app is retained as the rollback baseline. The running v0.9.2 experiment
-adds a small YOLO detector to each mono feed and a separate
-[Training Lab design](docs/mono-fusion-pipeline.md). Its `/training` page shows
-RGB, left, and right model evidence against the existing Orin IDs while not
-recording. The mono evidence is a geometric first pass, not a trained fused
-probability or completed re-identification model. Recording and training are
-still planned. The trial measured about 30 RGB result passes/s and roughly
-10 passes/s for each mono view. This experimental branch is not yet on `main`.
-Version 0.9.1 also lets Targets Only swap with the L2 spatial field as
-main view or PiP while leaving browser video disconnected.
-Version 0.9.2 labels spatial target dots with object names instead of track IDs.
-
-## Mode 01: detections and camera off
-
-[Source and deployment guide](apps/spatial-segmentation/README.md) ·
-[tracking issue #1](https://github.com/kenner1-unlv/Oak-4-CV-playground/issues/1)
-
-This is a browser mode in App 01. It draws distance-colored target reticles
-and mask outlines
-on a dark canvas aligned to the color camera. Selecting it **disconnects the
-H.264 viewer from that browser**, reducing client traffic; the camera sensors,
-model, stereo pipeline, and encoder remain active so switching back to video
-is immediate. The earlier green wall-line experiment was not accurate enough
-to keep. The dense-object pile in [the experiment plan](docs/experiments.md)
-remains the next evaluation.
+See [lab setup](docs/lab-setup.md) for addressing and access details.
 
 ## Run it
 
-Install the app through the Orin with `oakctl app build` followed by
-`oakctl app install`. The [app guide](apps/spatial-segmentation/README.md)
-contains the commands and runtime settings. The standalone desktop
-OAK Viewer should be closed while an app owns the camera pipeline.
-
-We use an SSH tunnel for the browser page and color video's WebSocket. The
-`localhost` URL gives H.264 the required browser context:
+Build then install through the Orin with `oakctl`; the
+[app guide](apps/spatial-segmentation/README.md) has exact commands and
+rollback IDs. Close the desktop OAK Viewer while the app owns the camera
+pipeline. From the development PC, forward the House V page and color video's
+WebSocket:
 
 ```powershell
 ssh -N -L 127.0.0.1:8082:192.168.50.60:8082 -L 127.0.0.1:8765:192.168.50.60:8765 sauce@192.168.1.2
 ```
 
-Visit **http://127.0.0.1:8082/**. Change the addresses and SSH account for
-another network. Confidence, IoU, and projector settings reset to app defaults
-on restart; the projector defaults to 0.50 intensity on this Pro camera.
+Open `http://127.0.0.1:8082/` or `http://127.0.0.1:8082/training`.
+Confidence, IoU, and projector settings reset to app defaults on restart.
 
 ## Repository map
 
-```text
-apps/
-  spatial-segmentation/   Segmentation, spatial tracks, camera/view controls
-docs/
-  architecture.md         Processing graph, records, and limitations
-  lab-setup.md            Hardware, network, build, and viewer setup
-  experiments.md          Pipeline candidates and evaluation questions
-  resolution-experiment.md  Tested scan patterns and video resolution
-bridges/
-  l2_cloud_relay.py     ROS 2 point-cloud preview for the House V browser
-scripts/
-  oak4-result-listener.py UDP inspection and FPS samples on the Orin
-  oak4-update.sh          Verify/apply a Luxonis OS OTA on the Orin
-```
-
-## Where this goes next
-
-Each new pipeline should live in its own `apps/` directory with a clear task,
-model/depth configuration, sample output, and measured tradeoffs. Candidates
-include better scene geometry, object-centric 3D localization,
-open-vocabulary detection, motion and identity tracking, and calibrated
-fusion with the Unitree L2. The current preview awaits a rigid mount and
-measured camera-to-LiDAR spacing and orientation. See the
-[experiment menu](docs/experiments.md). We will compare candidates against
-labeled scenes and report accuracy, latency, frame rate, and network cost
-before calling any one of them an improvement.
+| Path | Contents |
+| --- | --- |
+| [Camera app](apps/spatial-segmentation/) | Segmentation, mono detectors, stereo range, House V views and controls. |
+| [Architecture](docs/architecture.md) | Processing graph, result records, streams, and limits. |
+| [Training Lab design](docs/training-lab.md) | Recording, review, and train/validation/test direction. |
+| [Experiment menu](docs/experiments.md) | Dense-scene benchmark and candidate pipelines. |
+| [Resolution comparison](docs/resolution-experiment.md) | Earlier scan and video trials. |
+| [Orin bridges](bridges/README.md) | Identity and sampled Unitree L2 relay setup. |
 
 ## Known limits
 
-- The full scene is processed at 30 passes/s, but the fixed 640×352 model
-  input loses small/far detail when the larger RGB image is downscaled.
-- IDs are short-term associations, not re-identification after long occlusion.
-- Class labels can be wrong, and stereo range can fail on reflective,
-  textureless, or occluded regions. The on-screen model score is distinct from
-  valid depth coverage.
-- The L2 overlay is unaligned. Its assumed orientation and simple vertical
-  return filter are for visualization; a rigid mount, measured sensor spacing,
-  rotation, and timestamp alignment are pending before point-level labeling.
-- Quantitative detection accuracy, identity stability, distance error, and
-  end-to-end latency still need a labeled evaluation set.
+- Full-scene RGB inference downsamples to 640×352 and loses small or distant
+  detail. The mono detector uses a color-trained model on grayscale input;
+  its class scores have not been calibrated for this scene.
+- Global IDs are provisional. Geometry-only reattachment can merge lookalike
+  objects, and the current per-camera `+`/`−` evidence can match a nearby box.
+- Stereo range can fail on reflective, textureless, or occluded surfaces.
+  The L2 overlay is not calibrated to the camera or robot frame.
+- Quantitative class accuracy, ID switches, false merges, distance error,
+  dropped-frame rate, and end-to-end latency need labeled recordings.
