@@ -14,8 +14,10 @@ from depthai_nodes.utils import AnnotationHelper
 
 from hud import rounded_brackets, target_lines
 from model_controls import (IRProjectorControl, MonoFrameStore, SceneState,
-                            ZoomControl, InferenceRateControl,
+                            ZoomControl, InferenceRateControl, LabModeControl,
                             start_control_server)
+from feature_state import FeatureState
+from crop_store import RgbCropStore
 from mono_evidence import MonoDetectionStore, match_projected_tracks
 from mono_projection import project_point
 from perception_core import Observation, SpatialEstimate, TrackManager, estimate_spatial
@@ -34,6 +36,9 @@ VIDEO_BITRATE_KBPS = int(os.getenv("OAK4_VIDEO_BITRATE_KBPS", "60000"))
 MODEL_YAML = Path(__file__).parent / "models/yolov8_seg_large.RVC4.yaml"
 MONO_MODEL_YAML = Path(__file__).parent / "models/yolov6_nano_mono.RVC4.yaml"
 MONO_FPS = int(os.getenv("OAK4_MONO_FPS", "10"))
+RGB_CROP_FPS = int(os.getenv("OAK4_RGB_CROP_FPS", "5"))
+ENABLE_FEATURE_TRACKING = os.getenv("OAK4_FEATURE_TRACKING", "0") == "1"
+ENABLE_RGB_CROPS = os.getenv("OAK4_RGB_CROPS", "0") == "1"
 
 
 class MonoCaptureNode(dai.node.HostNode):
@@ -48,6 +53,24 @@ class MonoCaptureNode(dai.node.HostNode):
 
     def process(self, frame: dai.ImgFrame) -> None:
         self.store.publish(self.name, np.asarray(frame.getCvFrame()).copy())
+
+
+class RgbCaptureNode(dai.node.HostNode):
+    """Retain one low-rate RGB frame for selected Orin crop requests."""
+
+    def build(self, frames: dai.Node.Output,
+              store: RgbCropStore) -> "RgbCaptureNode":
+        self.store = store
+        self.last_timestamp_ns = 0
+        self.link_args(frames)
+        return self
+
+    def process(self, frame: dai.ImgFrame) -> None:
+        timestamp_ns = int(frame.getTimestampDevice().total_seconds() * 1e9)
+        if timestamp_ns - self.last_timestamp_ns < 1_000_000_000 // max(1, RGB_CROP_FPS):
+            return
+        self.last_timestamp_ns = timestamp_ns
+        self.store.publish(frame.getCvFrame(), timestamp_ns)
 
 
 class MonoDetectionNode(dai.node.HostNode):
@@ -79,6 +102,22 @@ class MonoDetectionNode(dai.node.HostNode):
             })
         timestamp_ns = int(message.getTimestampDevice().total_seconds() * 1e9)
         self.store.publish(self.camera, timestamp_ns, items)
+
+
+class FeatureCaptureNode(dai.node.HostNode):
+    """Keep timestamped mono feature IDs without claiming 3D positions."""
+
+    def build(self, features: dai.Node.Output, store: FeatureState,
+              camera: str) -> "FeatureCaptureNode":
+        self.store = store
+        self.camera = camera
+        self.link_args(features)
+        return self
+
+    def process(self, message: dai.TrackedFeatures) -> None:
+        timestamp_ns = int(message.getTimestampDevice().total_seconds() * 1e9)
+        self.store.publish(self.camera, timestamp_ns,
+                           message.trackedFeatures, STEREO_SIZE)
 
 
 class ResultNode(dai.node.HostNode):
@@ -392,6 +431,8 @@ def main() -> None:
         raise ValueError("OAK4_VIDEO_BITRATE_KBPS must be 1000..60000")
     if not 1 <= MONO_FPS <= FPS:
         raise ValueError("OAK4_MONO_FPS must be 1..OAK4_FPS")
+    if not 1 <= RGB_CROP_FPS <= FPS:
+        raise ValueError("OAK4_RGB_CROP_FPS must be 1..OAK4_FPS")
     archive = dai.NNArchive(
         dai.getModelFromZoo(dai.NNModelDescription.fromYamlFile(str(MODEL_YAML)))
     )
@@ -422,6 +463,8 @@ def main() -> None:
     scene_state = SceneState()
     mono_frames = MonoFrameStore()
     mono_detections = MonoDetectionStore()
+    feature_state = FeatureState()
+    crop_store = RgbCropStore()
     device = dai.Device()
     if device.getPlatform() != dai.Platform.RVC4:
         raise RuntimeError("This app requires an RVC4 camera")
@@ -455,6 +498,10 @@ def main() -> None:
             model_size, dai.ImgFrame.Type.RGB888i, fps=FPS,
             enableUndistortion=True,
         )
+        # RVC4 permits three Camera outputs. Reuse the detection canvas for
+        # crops; the host retains only the configured sampling rate.
+        if ENABLE_RGB_CROPS:
+            pipeline.create(RgbCaptureNode).build(tile_source, crop_store)
         left = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_B)
         right = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_C)
         mono_left = left.requestOutput(
@@ -470,9 +517,41 @@ def main() -> None:
         )
         pipeline.create(MonoCaptureNode).build(mono_left, mono_frames, "left")
         pipeline.create(MonoCaptureNode).build(mono_right, mono_frames, "right")
+        mono_gate_queues = []
         for name, camera in (("left", left), ("right", right)):
             source = camera.requestOutput(
-                STEREO_SIZE, dai.ImgFrame.Type.GRAY8, fps=MONO_FPS
+                STEREO_SIZE,
+                (dai.ImgFrame.Type.NV12 if ENABLE_FEATURE_TRACKING
+                 else dai.ImgFrame.Type.GRAY8), fps=MONO_FPS
+            )
+            if ENABLE_FEATURE_TRACKING:
+                tracker_gray = pipeline.create(dai.node.ImageManip)
+                tracker_gray.initialConfig.setFrameType(dai.ImgFrame.Type.GRAY8)
+                source.link(tracker_gray.inputImage)
+                tracker = pipeline.create(dai.node.FeatureTracker)
+                tracker.initialConfig.setNumTargetFeatures(160)
+                tracker.initialConfig.setMotionEstimator(True)
+                tracker_gray.out.link(tracker.inputImage)
+                pipeline.create(FeatureCaptureNode).build(
+                    tracker.outputFeatures, feature_state, name
+                )
+            gate = pipeline.create(dai.node.Script)
+            gate.setScript("""
+enabled = False
+while True:
+    frame = node.inputs['frame'].get()
+    control = node.inputs['control'].tryGet()
+    if control is not None:
+        data = control.getData()
+        if len(data):
+            enabled = bool(data[0])
+    if enabled:
+        node.outputs['selected'].send(frame)
+""")
+            source.link(gate.inputs["frame"])
+            mono_gate_queues.append(
+                gate.inputs["control"].createInputQueue(maxSize=2,
+                                                         blocking=False)
             )
             mono_manip = pipeline.create(dai.node.ImageManip)
             mono_manip.setMaxOutputFrameSize(
@@ -482,7 +561,7 @@ def main() -> None:
                 *mono_size, dai.ImageManipConfig.ResizeMode.STRETCH
             )
             mono_manip.initialConfig.setFrameType(dai.ImgFrame.Type.BGR888i)
-            source.link(mono_manip.inputImage)
+            gate.outputs["selected"].link(mono_manip.inputImage)
             mono_nn = pipeline.create(dai.node.DetectionNetwork).build(
                 mono_manip.out, mono_archive, confidenceThreshold=0.20
             )
@@ -595,6 +674,7 @@ while True:
             rate_queue, dai.Buffer, FPS,
             on_change=results.tracks.set_inference_rate,
         )
+        lab_mode_control = LabModeControl(mono_gate_queues, dai.Buffer)
         ir_projector = IRProjectorControl(device)
         try:
             ir_projector.apply({"enabled": True, "intensity": 0.5})
@@ -606,6 +686,9 @@ while True:
             scene_state, mono_frames, ir_projector, 8082,
             zoom_control=zoom_control,
             inference_control=inference_control,
+            lab_mode_control=lab_mode_control,
+            feature_state=feature_state,
+            crop_store=crop_store,
         )
         LOG.info(
             "Perception pipeline running: target=%s fps, video=%sx%s, "

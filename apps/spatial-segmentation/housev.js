@@ -2,8 +2,7 @@
 const $ = id => document.getElementById(id);
 const view = $('view');
 const spatialCanvas = $('spatial-map');
-const spatialHeading = document.querySelector('.map-heading');
-const intelPanel = document.querySelector('.intel-panel');
+const workspace = document.querySelector('.workspace');
 const keys = ['confidence', 'iou'];
 const host = location.hostname;
 let trainingMode = location.hash === '#training';
@@ -20,6 +19,8 @@ let cameraStage = null;
 let pipMain = 'video';
 let latestScene = null;
 let latestIdentities = null;
+let latestFeatures = null;
+let labModeRequest = 0;
 let indexMode = 'nearest';
 const smoothedTracks = new Map();
 let latestLidar = null;
@@ -226,9 +227,10 @@ function refreshButtons() {
   $('video-reconnect').hidden = mode !== 'color';
 }
 function swapPip() {
-  if(!cameraStage)return;
+  if (!cameraStage) return;
   pipMain = pipMain === 'video' ? 'spatial' : 'video';
-  cameraStage.dataset.main = pipMain;
+  workspace.dataset.main = pipMain;
+  view.dataset.inset = String(pipMain === 'spatial');
   refreshButtons();
   renderActive();
 }
@@ -237,52 +239,41 @@ function setMode(next) {
     if (next === 'color') reconnectColorViewer(true);
     return;
   }
-  if (spatialCanvas.parentElement !== intelPanel) spatialHeading.after(spatialCanvas);
-  intelPanel.classList.remove('color-mode');
   cleanupViewer();
   monoGeneration++;
   mode = next;
   view.replaceChildren(); // Removing the iframe closes its H.264 WebSocket.
+  view.dataset.label = next === 'color' ? 'RGB STREAM / PIP' :
+    next === 'detections' ? 'TARGETS / PIP' : `${next.toUpperCase()} MONO / PIP`;
+  view.dataset.inset = String(pipMain === 'spatial');
+  workspace.dataset.main = pipMain;
+  cameraStage = view;
   refreshButtons();
   if (next === 'color') {
     $('mode-note').textContent = 'CAM A + L2 SPATIAL / SWITCHABLE PIP';
-    const stage = document.createElement('div'); stage.className = 'color-stage';
-    stage.dataset.main = pipMain;
-    const videoPane = document.createElement('div'); videoPane.className = 'video-pane';
-    const spatialPane = document.createElement('div'); spatialPane.className = 'spatial-pane';
-    spatialPane.append(spatialCanvas);
-    const caption = document.createElement('span');caption.className = 'spatial-caption';
-    caption.textContent = 'L2 FIELD // UNCALIBRATED';
-    spatialPane.append(caption);
-    stage.append(videoPane,spatialPane);view.append(stage);
-    intelPanel.classList.add('color-mode');
-    cameraStage = stage;
+    const videoPane = document.createElement('div');
+    videoPane.className = 'video-pane';
+    view.append(videoPane);
     mountColorViewer();
   } else if (next === 'left' || next === 'right') {
     $('mode-note').textContent = `CAM ${next === 'left' ? 'B' : 'C'} / MONO + L2 SPATIAL PIP`;
-    const stage = document.createElement('div'); stage.className = 'color-stage';
-    stage.dataset.main = pipMain;
-    const monoPane = document.createElement('div'); monoPane.className = 'mono-pane';
-    monoPane.dataset.label = `${next.toUpperCase()} MONO / PIP`;
-    const image = document.createElement('img'); image.alt = `${next} monochrome camera`;
+    const monoPane = document.createElement('div');
+    monoPane.className = 'mono-pane';
+    const image = document.createElement('img');
+    image.alt = `${next} monochrome camera`;
     const overlay = document.createElement('canvas');
-    overlay.width = 640; overlay.height = 400;
+    overlay.width = 640;
+    overlay.height = 400;
     monoPane.append(image, overlay);
-    const spatialPane = document.createElement('div'); spatialPane.className = 'spatial-pane';
-    spatialPane.append(spatialCanvas);
-    const caption = document.createElement('span');caption.className = 'spatial-caption';
-    caption.textContent = 'L2 FIELD // UNCALIBRATED';spatialPane.append(caption);
-    stage.append(monoPane,spatialPane);view.append(stage);
-    intelPanel.classList.add('color-mode');cameraStage=stage;
+    view.append(monoPane);
     loadMono(next, image, monoGeneration);
   } else {
-    $('mode-note').textContent = 'RGB TARGETS + L2 SPATIAL PIP · VIDEO CLIENT DISCONNECTED';
-    const stage = document.createElement('div'); stage.className = 'color-stage';
-    stage.dataset.main = pipMain;
+    $('mode-note').textContent = 'RGB TARGETS + L2 SPATIAL PIP ? VIDEO CLIENT DISCONNECTED';
     const detectionsPane = document.createElement('div');
     detectionsPane.className = 'detections-pane';
     const canvas = document.createElement('canvas');
-    canvas.width = 1920; canvas.height = 1056;
+    canvas.width = 1920;
+    canvas.height = 1056;
     canvas.setAttribute('aria-label', 'Detection-only target view');
     canvas.addEventListener('click', event => {
       if (!zoomAvailable) return;
@@ -291,13 +282,7 @@ function setMode(next) {
                   center_y: (event.clientY - rect.top) / rect.height});
     });
     detectionsPane.append(canvas);
-    const spatialPane = document.createElement('div');
-    spatialPane.className = 'spatial-pane';
-    spatialPane.append(spatialCanvas);
-    const caption = document.createElement('span');caption.className = 'spatial-caption';
-    caption.textContent = 'L2 FIELD // UNCALIBRATED';spatialPane.append(caption);
-    stage.append(detectionsPane,spatialPane);view.append(stage);
-    intelPanel.classList.add('color-mode');cameraStage=stage;
+    view.append(detectionsPane);
   }
   renderActive();
 }
@@ -306,10 +291,21 @@ function setLabMode(next, updateUrl = true) {
   document.title = trainingMode ? 'House V / Training Lab' : 'House V / Vision Lab';
   document.querySelector('.brand small').textContent =
     trainingMode ? 'TRAINING LAB // OAK 4 D PRO' : 'VISION LAB // OAK 4 D PRO';
-  $('lab-state').textContent = trainingMode ? 'LIVE / NOT RECORDING' : '';
+  $('lab-state').textContent = trainingMode ? 'MONO NN STARTING / NOT RECORDING' :
+    'MONO NN PAUSED';
+  $('feature-status').hidden = trainingMode;
   document.querySelectorAll('.lab-nav button[data-lab-mode]').forEach(button =>
     button.setAttribute('aria-pressed', String(button.dataset.labMode === next)));
   if (updateUrl) history.replaceState(null, '', trainingMode ? '/#training' : '/');
+  const request = ++labModeRequest;
+  sendJson('/api/lab-mode', {training:trainingMode}).then(state => {
+    if (request !== labModeRequest) return;
+    $('lab-state').textContent = state.training ?
+      'MONO NN LIVE / NOT RECORDING' : 'MONO NN PAUSED';
+  }).catch(error => {
+    if (request === labModeRequest) $('lab-state').textContent = 'MONO NN CONTROL OFFLINE';
+    console.warn('Lab mode control unavailable', error);
+  });
   if (mode !== null) renderActive();
 }
 document.querySelectorAll('.lab-nav button[data-lab-mode]').forEach(button =>
@@ -322,7 +318,10 @@ $('pip-toggle').addEventListener('click',swapPip);
 $('video-reconnect').addEventListener('click', () => reconnectColorViewer(true));
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) cleanupViewer();
-  else mountColorViewer();
+  else {
+    mountColorViewer();
+    setLabMode(trainingMode ? 'training' : 'spatial', false);
+  }
 });
 setInterval(() => {
   if (mode !== 'color' || document.hidden || !viewerFrame ||
@@ -513,6 +512,12 @@ function drawHud(canvas, scene, darkBackground) {
 function drawMonoMarkers(canvas, scene, source) {
   if (!canvas) return;
   const ctx=canvas.getContext('2d');ctx.clearRect(0,0,640,400);
+  const features=!trainingMode?latestFeatures?.[source]:null;
+  if(features?.age_ms<1000) {
+    ctx.fillStyle='rgba(102,216,231,.65)';
+    for(const [,u,v] of features.points||[])
+      ctx.fillRect(u*640-1,v*400-1,2,2);
+  }
   if (!showLocks||scene?.age_ms==null||scene.age_ms>1200) return;
   const occupied=[];
   for (const obj of [...scene.objects].sort((a,b)=>b.detector_score-a.detector_score)) {
@@ -708,6 +713,21 @@ async function pollIdentities() {
   updateTargetIndex(latestScene);
   setTimeout(pollIdentities,nextPollMs);
 }
+async function pollFeatures() {
+  if (document.hidden || trainingMode) { setTimeout(pollFeatures, 1000); return; }
+  try {
+    const response=await fetch('/api/features',{cache:'no-store'});
+    if(!response.ok)throw new Error(`Features HTTP ${response.status}`);
+    latestFeatures=await response.json();
+    const left=latestFeatures.left?.count, right=latestFeatures.right?.count;
+    $('feature-status').textContent=left == null && right == null ?
+      'FEATURE TRACKER PAUSED' : `2D FEATURES L ${left??'--'} / R ${right??'--'}`;
+  } catch(error) {
+    latestFeatures=null;
+    $('feature-status').textContent='2D FEATURES OFFLINE';
+  }
+  setTimeout(pollFeatures,500);
+}
 
 function renderActive() {
   const live=latestScene?.age_ms!=null&&latestScene.age_ms<=1200;
@@ -755,3 +775,4 @@ setMode('color');
 pollTelemetry();
 pollLidar();
 pollIdentities();
+pollFeatures();

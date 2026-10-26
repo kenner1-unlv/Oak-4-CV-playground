@@ -190,6 +190,33 @@ class InferenceRateControl:
             return {"fps": self.fps, "video_fps": self.video_fps}
 
 
+class LabModeControl:
+    """Feed mono detector nodes only while Training Lab is selected."""
+
+    def __init__(self, queues, buffer_factory):
+        self.queues = queues
+        self.buffer_factory = buffer_factory
+        self.lock = threading.Lock()
+        self.training = False
+
+    def read(self):
+        with self.lock:
+            return {"training": self.training}
+
+    def apply(self, payload):
+        if not isinstance(payload, dict) or set(payload) != {"training"} or \
+                not isinstance(payload["training"], bool):
+            raise ValueError("training must be true or false")
+        with self.lock:
+            value = payload["training"]
+            for queue in self.queues:
+                message = self.buffer_factory()
+                message.setData([1 if value else 0])
+                queue.send(message)
+            self.training = value
+            return {"training": self.training}
+
+
 class ModelControls:
     def __init__(self, parser, config_queue, config_factory) -> None:
         self.values = {
@@ -228,17 +255,22 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                  mono_frames: MonoFrameStore | None = None,
                  ir_projector: IRProjectorControl | None = None,
                  zoom_control: ZoomControl | None = None,
-                 inference_control: InferenceRateControl | None = None):
+                 inference_control: InferenceRateControl | None = None,
+                 lab_mode_control: LabModeControl | None = None,
+                 feature_state=None, crop_store=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format_string: str, *args) -> None:
             LOG.debug(format_string, *args)
 
-        def respond(self, status: int, body: bytes, content_type: str) -> None:
+        def respond(self, status: int, body: bytes, content_type: str,
+                    extra_headers: dict | None = None) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, str(value))
             self.end_headers()
             self.wfile.write(body)
 
@@ -306,6 +338,43 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
             elif self.path == "/api/inference" and inference_control is not None:
                 self.respond(200, json.dumps(inference_control.read()).encode(),
                              "application/json")
+            elif self.path == "/api/lab-mode" and lab_mode_control is not None:
+                self.respond(200, json.dumps(lab_mode_control.read()).encode(),
+                             "application/json")
+            elif self.path == "/api/features" and feature_state is not None:
+                self.respond(200, json.dumps(feature_state.read()).encode(),
+                             "application/json")
+            elif (self.path.startswith("/api/crop/") and
+                  crop_store is not None and scene_state is not None):
+                name = self.path.removeprefix("/api/crop/")
+                try:
+                    if not name.endswith(".jpg"):
+                        raise ValueError("Invalid crop path")
+                    track_id = int(name.removesuffix(".jpg"))
+                except ValueError:
+                    self.respond(404, b"Unknown track", "text/plain")
+                    return
+                scene = scene_state.read()
+                obj = next((item for item in scene.get("objects", [])
+                            if item.get("track_id") == track_id and
+                            item.get("track_state") == "tracked"), None)
+                if (obj is None or scene.get("age_ms") is None or
+                    scene["age_ms"] > 500 or
+                    scene.get("device_timestamp_ns") is None):
+                    self.respond(404, b"Track not current", "text/plain")
+                    return
+                crop = crop_store.jpeg(obj.get("bbox_xyxy_norm"),
+                                       scene["device_timestamp_ns"])
+                if crop is None:
+                    self.respond(503, b"Synchronized crop unavailable",
+                                 "text/plain")
+                    return
+                image, frame_timestamp_ns = crop
+                self.respond(200, image, "image/jpeg", {
+                    "X-Frame-Timestamp-Ns": frame_timestamp_ns,
+                    "X-Scene-Frame-Id": scene["frame_id"],
+                    "X-Source-Track-Id": track_id,
+                })
             elif self.path == "/training":
                 self.send_response(302)
                 self.send_header("Location", "/#training")
@@ -322,7 +391,7 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
 
         def do_PUT(self) -> None:
             if self.path not in ("/api/model", "/api/ir", "/api/zoom",
-                                 "/api/inference"):
+                                 "/api/inference", "/api/lab-mode"):
                 self.respond(404, b"Not found", "text/plain")
                 return
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -342,6 +411,9 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                 elif (self.path == "/api/inference" and
                       inference_control is not None):
                     result = inference_control.apply(payload)
+                elif (self.path == "/api/lab-mode" and
+                      lab_mode_control is not None):
+                    result = lab_mode_control.apply(payload)
                 else:
                     self.respond(404, b"Not found", "text/plain")
                     return
@@ -361,7 +433,10 @@ def start_control_server(parser, config_queue, config_factory,
                          ir_projector: IRProjectorControl,
                          port: int,
                          zoom_control: ZoomControl | None = None,
-                         inference_control: InferenceRateControl | None = None
+                         inference_control: InferenceRateControl | None = None,
+                         lab_mode_control: LabModeControl | None = None,
+                         feature_state=None,
+                         crop_store=None,
                          ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer(("0.0.0.0", port),
                                  make_handler(ModelControls(
@@ -370,7 +445,10 @@ def start_control_server(parser, config_queue, config_factory,
                                  mono_frames=mono_frames,
                                  ir_projector=ir_projector,
                                  zoom_control=zoom_control,
-                                 inference_control=inference_control))
+                                 inference_control=inference_control,
+                                 lab_mode_control=lab_mode_control,
+                                 feature_state=feature_state,
+                                 crop_store=crop_store))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     LOG.info("Live model controls listening on port %s", port)

@@ -2,6 +2,7 @@ import json
 import sys
 import threading
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -9,7 +10,9 @@ from urllib.request import Request, urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from model_controls import (IRProjectorControl, ModelControls, MonoFrameStore,
                             SceneState, ZoomControl, InferenceRateControl,
+                            LabModeControl,
                             make_handler)
+from feature_state import FeatureState
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -55,7 +58,33 @@ class FakeBuffer:
         self.data = value
 
 
+class FakeCropStore:
+    def jpeg(self, bbox, timestamp_ns):
+        if bbox == [0.1, 0.2, 0.5, 0.7] and timestamp_ns == 123:
+            return b"jpeg-crop", 120
+        return None
+
+
 class ModelControlTests(unittest.TestCase):
+    def test_lab_mode_gates_both_mono_models(self):
+        queues = [FakeQueue(), FakeQueue()]
+        mode = LabModeControl(queues, FakeBuffer)
+        self.assertEqual(mode.read(), {"training": False})
+        self.assertEqual(mode.apply({"training": True}), {"training": True})
+        self.assertEqual([queue.sent[-1].data for queue in queues], [[1], [1]])
+        self.assertEqual(mode.apply({"training": False}), {"training": False})
+        self.assertEqual([queue.sent[-1].data for queue in queues], [[0], [0]])
+        for invalid in ({"training": 1}, {"training": "yes"}, {},
+                        {"training": True, "other": 1}):
+            with self.assertRaises(ValueError):
+                mode.apply(invalid)
+
+    def test_feature_state_reports_normalized_positions(self):
+        features = FeatureState()
+        point = SimpleNamespace(id=7, position=SimpleNamespace(x=320, y=100))
+        features.publish("left", 123, [point], (640, 400))
+        self.assertEqual(features.read()["left"]["points"], [[7, 0.5, 0.25]])
+
     def test_thresholds_change_live_and_invalid_values_leave_both_unchanged(self):
         parser = FakeParser()
         queue = FakeQueue()
@@ -75,11 +104,17 @@ class ModelControlTests(unittest.TestCase):
         controls = ModelControls(FakeParser(), FakeQueue(), FakeConfig)
         rate_queue = FakeQueue()
         inference = InferenceRateControl(rate_queue, FakeBuffer, 30)
+        lab_queues = [FakeQueue(), FakeQueue()]
+        lab_mode = LabModeControl(lab_queues, FakeBuffer)
+        features = FeatureState()
         scene = SceneState()
         scene.publish({"frame_id": 7, "objects": []})
         server = ThreadingHTTPServer(("127.0.0.1", 0),
                                      make_handler(controls, scene_state=scene,
-                                                  inference_control=inference))
+                                                  inference_control=inference,
+                                                  lab_mode_control=lab_mode,
+                                                  feature_state=features,
+                                                  crop_store=FakeCropStore()))
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         base = f"http://127.0.0.1:{server.server_port}"
@@ -102,6 +137,31 @@ class ModelControlTests(unittest.TestCase):
                 self.assertEqual(json.load(response)["confidence"], 0.25)
             with urlopen(base + "/api/scene") as response:
                 self.assertEqual(json.load(response)["frame_id"], 7)
+            scene.publish({"frame_id": 8, "device_timestamp_ns": 123,
+                           "objects": [
+                               {"track_id": 7, "track_state": "tracked",
+                                "bbox_xyxy_norm": [0.1, 0.2, 0.5, 0.7]},
+                               {"track_id": 9, "track_state": "held",
+                                "bbox_xyxy_norm": [0.1, 0.2, 0.5, 0.7]}]})
+            with urlopen(base + "/api/crop/7.jpg") as response:
+                self.assertEqual(response.read(), b"jpeg-crop")
+                self.assertEqual(response.headers["X-Frame-Timestamp-Ns"],
+                                 "120")
+                self.assertEqual(response.headers["X-Source-Track-Id"], "7")
+            with self.assertRaises(HTTPError) as error:
+                urlopen(base + "/api/crop/9.jpg")
+            self.assertEqual(error.exception.code, 404)
+            error.exception.close()
+            with urlopen(base + "/api/features") as response:
+                self.assertEqual(json.load(response), {})
+            request = Request(base + "/api/lab-mode",
+                              data=b'{"training":true}',
+                              headers={"Content-Type": "application/json"},
+                              method="PUT")
+            with urlopen(request) as response:
+                self.assertTrue(json.load(response)["training"])
+            self.assertEqual([queue.sent[-1].data for queue in lab_queues],
+                             [[1], [1]])
             request = Request(base + "/api/inference", data=b'{"fps":18}',
                               headers={"Content-Type": "application/json"},
                               method="PUT")

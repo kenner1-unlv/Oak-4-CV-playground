@@ -48,6 +48,7 @@
       <button id="lidar-toggle" aria-pressed="true">L2 POINTS ON</button>
       <button id="pip-toggle" aria-pressed="false">SPATIAL MAIN</button>
       <button id="video-reconnect" type="button" hidden>RECONNECT RGB</button>
+      <span id="feature-status" class="feature-status" hidden>FEATURES --</span>
       <span id="lidar-status" class="lidar-status">L2 CONNECTING · UNCALIBRATED</span>
       <div id="zoom-controls" hidden>
         <span class="mode-label">ZOOM ROI</span>
@@ -57,17 +58,19 @@
       <span id="mode-note"></span>
     </nav>
 
-    <div class="workspace">
+    <div class="workspace" data-main="video">
       <main id="view" aria-label="Camera view"></main>
       <aside class="intel-panel">
         <div class="panel-heading"><span id="index-title">TARGET INDEX</span>
           <button id="index-mode" type="button">LONGEST IDS</button>
           <output id="target-count">00</output></div>
         <div id="target-list"><p class="empty">Waiting for scene metadata…</p></div>
-        <div class="map-heading">SPATIAL FIELD <span>L2 FACES · RED NEAR → CYAN FAR</span></div>
-        <canvas id="spatial-map" width="280" height="190" aria-label="Top-down target positions"></canvas>
         <div class="panel-foot"><span id="scene-age">AGE --</span><span id="range-count">RANGE --</span></div>
       </aside>
+      <section id="spatial-stage" aria-label="Top-down spatial field">
+        <canvas id="spatial-map" width="280" height="190" aria-label="Top-down target positions"></canvas>
+        <span class="spatial-caption">L2 FIELD // UNCALIBRATED</span>
+      </section>
     </div>
     <footer><span>HOUSE V <i>//</i> PERCEPTION BASELINE</span>
       <span>COLOR / STEREO / TARGET DATA · POWERED BY DEPTHAI</span></footer>

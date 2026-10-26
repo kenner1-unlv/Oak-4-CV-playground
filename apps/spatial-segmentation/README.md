@@ -18,6 +18,10 @@ the target index for track debugging.
 Version 0.9.3 uses one browser page for both lab panels and provides a manual
 and bounded automatic RGB viewer reconnect. Hidden browser tabs release their
 video connection and slow their metadata polling.
+Version 0.10.8 moves the secondary view below the unobstructed main view,
+beside a compact two-column target index. PiP swaps and lab switches retain
+the current RGB iframe. In Spatial mode, the two mono detection passes are
+paused; Training Lab enables them again through `/api/lab-mode`.
 
 The first live v0.9.0 check on 2026-10-25 showed about 30 RGB result passes/s,
 roughly 10 distinct mono result timestamps/s on each side, and actual mono
@@ -32,6 +36,8 @@ The v0.9.2 package SHA-256 is
 `403d9aba69c386fda7d7dcc88e82c263027fe66e2d7e71776456f79f0c393795`.
 The v0.9.3 package SHA-256 is
 `86d164b1ac1591ce3e5fc7cc03b5add8f2bdc13ecfc1c53411c0262d06f88abe`.
+The live v0.10.8 package SHA-256 is
+`cc2850ae7a5352b2bcef15c34e2df5a4545c643f0c6b142ab0ad7a383f955764`.
 
 | View | Browser data | Detection toggle |
 | --- | --- | --- |
@@ -79,6 +85,17 @@ as useful for stereo matching on low-texture surfaces.
   timestamps, boxes, IDs, labels, XYZ, range, and track state. No video frames
   or recordings are saved by this app.
 
+The Spatial all-star trial adds optional `OAK4_FEATURE_TRACKING=1` and
+`OAK4_RGB_CROPS=1` paths plus `/api/features` and `/api/crop/<track_id>.jpg`.
+Both paths default **off** in v0.10.8. A two-camera FeatureTracker trial
+crashed the RVC4 firmware during startup, including after the mono input was
+converted through ImageManip; it requires an isolated one-camera resource
+test before activation. The crop path is implemented but has not been tested
+on a running camera. No DINOv3 embedding worker, NeuralAssistedStereo
+comparison, or calibrated camera-to-L2 point fusion is running yet. The
+official DINOv3 checkpoint also requires model access. These trial paths do
+not create long-lived appearance identities or semantic L2 labels.
+
 See [the architecture](../../docs/architecture.md) for the processing graph,
 browser delivery, and result format.
 
@@ -94,7 +111,7 @@ export ORIN_WIRED_IP=192.168.50.2
 mkdir -p /data/oak4/packages
 oakctl app build apps/spatial-segmentation --device "$OAK_DEVICE" \
   --output /data/oak4/packages
-oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-9-3.oakapp \
+oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-10-8.oakapp \
   --device "$OAK_DEVICE" --force-new --start false --enable false \
   --env ORIN_RESULT_HOST="$ORIN_WIRED_IP" --env OAK4_FPS=30 \
   --env OAK4_SCAN_MODE=full --env OAK4_VIDEO_SCALE=4 \
@@ -127,10 +144,10 @@ The color iframe is mounted only while the Color source is visible. Hidden
 tabs release it; **RECONNECT RGB** or reselecting Color reloads only the
 viewer if its frames stall while the scene feed remains live.
 In Color mode, **SPATIAL MAIN / VIDEO MAIN** swaps the large view and the
-picture-in-picture without recreating the video iframe. The spatial canvas
-can likewise swap with either mono camera. It returns to the target panel in
-views that do not pair it with the camera. Targets Only now shares the same
-main/PiP control with the spatial field; its browser video remains disconnected.
+small bottom-right view without recreating the video iframe. The compact
+two-column target index sits beside the small view, leaving the main view
+unobstructed. The spatial canvas can likewise swap with either mono camera
+or Targets Only; the latter keeps browser video disconnected.
 The **YOLO PASS/S** slider gates inference from 10 to 30 passes/s without
 changing the 30 FPS video. The header reports measured result passes/s. A
 time-based browser filter steadies target position and range across distinct
