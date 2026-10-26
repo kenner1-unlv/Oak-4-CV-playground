@@ -18,6 +18,7 @@ from model_controls import (IRProjectorControl, MonoFrameStore, SceneState,
                             start_control_server)
 from feature_state import FeatureState
 from crop_store import RgbCropStore
+from dino_state import DinoState
 from mono_evidence import MonoDetectionStore, match_projected_tracks
 from mono_projection import project_point
 from perception_core import Observation, SpatialEstimate, TrackManager, estimate_spatial
@@ -39,6 +40,9 @@ MONO_FPS = int(os.getenv("OAK4_MONO_FPS", "10"))
 RGB_CROP_FPS = int(os.getenv("OAK4_RGB_CROP_FPS", "5"))
 ENABLE_FEATURE_TRACKING = os.getenv("OAK4_FEATURE_TRACKING", "0") == "1"
 ENABLE_RGB_CROPS = os.getenv("OAK4_RGB_CROPS", "0") == "1"
+ENABLE_DINO = os.getenv("OAK4_DINO", "0") == "1"
+DINO_MODEL_YAML = Path(__file__).parent / "models/dinov3_vit_small.RVC4.yaml"
+DINO_SIZE = (384, 288)
 
 
 class MonoCaptureNode(dai.node.HostNode):
@@ -71,6 +75,75 @@ class RgbCaptureNode(dai.node.HostNode):
             return
         self.last_timestamp_ns = timestamp_ns
         self.store.publish(frame.getCvFrame(), timestamp_ns)
+
+
+class DinoCropNode(dai.node.HostNode):
+    """Send selected, timestamped RGB object crops to the on-device model."""
+
+    def __init__(self):
+        super().__init__()
+        self.crops = self.createOutput(possibleDatatypes=[
+            dai.Node.DatatypeHierarchy(dai.DatatypeEnum.ImgFrame, True)
+        ])
+
+    def build(self, frames, scene_state, dino_state):
+        self.scene_state = scene_state
+        self.dino_state = dino_state
+        self.link_args(frames)
+        return self
+
+    def process(self, frame: dai.ImgFrame) -> None:
+        timestamp_ns = int(frame.getTimestampDevice().total_seconds() * 1e9)
+        selected = self.dino_state.select(self.scene_state.read(), timestamp_ns)
+        if selected is None:
+            return
+        sequence, item = selected
+        image = frame.getCvFrame()
+        height, width = image.shape[:2]
+        x0, y0, x1, y1 = item["bbox_xyxy_norm"]
+        # A little context helps the embedding survive minor box jitter.
+        pad_x, pad_y = (x1 - x0) * 0.08, (y1 - y0) * 0.08
+        left = max(0, int((x0 - pad_x) * width))
+        top = max(0, int((y0 - pad_y) * height))
+        right = min(width, int(np.ceil((x1 + pad_x) * width)))
+        bottom = min(height, int(np.ceil((y1 + pad_y) * height)))
+        if right - left < 8 or bottom - top < 8:
+            self.dino_state.fail(sequence)
+            return
+        crop = cv2.resize(image[top:bottom, left:right], DINO_SIZE,
+                          interpolation=cv2.INTER_LINEAR)
+        sample = dai.ImgFrame()
+        sample.setData(np.ascontiguousarray(crop))
+        sample.setWidth(DINO_SIZE[0])
+        sample.setHeight(DINO_SIZE[1])
+        sample.setType(dai.ImgFrame.Type.BGR888i)
+        sample.setTimestamp(frame.getTimestamp())
+        sample.setTimestampDevice(frame.getTimestampDevice())
+        sample.setSequenceNum(sequence)
+        self.crops.send(sample)
+
+
+class DinoResultNode(dai.node.HostNode):
+    """Pool dense features and forward provenance-tagged vectors to Orin."""
+
+    def build(self, embeddings, state):
+        self.state = state
+        self.link_args(embeddings)
+        host = os.getenv("ORIN_RESULT_HOST", "").strip()
+        self.target = (host, int(os.getenv("ORIN_RESULT_PORT", "8766"))) if host else None
+        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if host else None
+        return self
+
+    def process(self, message: dai.NNData) -> None:
+        sequence = message.getSequenceNum()
+        try:
+            packet = self.state.complete(sequence, message.getTensor("embeddings"))
+            if packet is not None and self.udp is not None:
+                self.udp.sendto(json.dumps(packet, separators=(",", ":")).encode(),
+                                self.target)
+        except (ValueError, OSError) as exc:
+            self.state.fail(sequence)
+            LOG.warning("DINOv3 result unavailable: %s", exc)
 
 
 class MonoDetectionNode(dai.node.HostNode):
@@ -460,7 +533,13 @@ def main() -> None:
     )
     mono_labels = mono_archive.getConfig().model.heads[0].metadata.classes
     mono_size = mono_archive.getInputSize()
+    dino_archive = (dai.NNArchive(dai.getModelFromZoo(
+        dai.NNModelDescription.fromYamlFile(str(DINO_MODEL_YAML))
+    )) if ENABLE_DINO else None)
+    if dino_archive is not None and dino_archive.getInputSize() != DINO_SIZE:
+        raise ValueError("Unexpected DINOv3 input size")
     scene_state = SceneState()
+    dino_state = DinoState() if ENABLE_DINO else None
     mono_frames = MonoFrameStore()
     mono_detections = MonoDetectionStore()
     feature_state = FeatureState()
@@ -652,6 +731,17 @@ while True:
             scene_state, mono_projectors, mono_detections,
         )
 
+        if dino_archive is not None:
+            crop_node = pipeline.create(DinoCropNode).build(
+                tile_source, scene_state, dino_state
+            )
+            dino_nn = pipeline.create(ParsingNeuralNetwork).build(
+                crop_node.crops, dino_archive
+            )
+            pipeline.create(DinoResultNode).build(
+                dino_nn.out, dino_state
+            )
+
         video = color.requestOutput(
             video_size, dai.ImgFrame.Type.NV12, fps=FPS,
             enableUndistortion=True,
@@ -674,7 +764,8 @@ while True:
             rate_queue, dai.Buffer, FPS,
             on_change=results.tracks.set_inference_rate,
         )
-        lab_mode_control = LabModeControl(mono_gate_queues, dai.Buffer)
+        lab_mode_control = LabModeControl(mono_gate_queues, dai.Buffer,
+                                          dino_state=dino_state)
         ir_projector = IRProjectorControl(device)
         try:
             ir_projector.apply({"enabled": True, "intensity": 0.5})
@@ -689,6 +780,7 @@ while True:
             lab_mode_control=lab_mode_control,
             feature_state=feature_state,
             crop_store=crop_store,
+            dino_state=dino_state,
         )
         LOG.info(
             "Perception pipeline running: target=%s fps, video=%sx%s, "

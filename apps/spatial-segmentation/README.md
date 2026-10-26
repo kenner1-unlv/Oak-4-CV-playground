@@ -10,7 +10,7 @@ and right) to the experimental app. The Training Lab view uses the same camera
 views and shows independent RGB/mono agreement or disagreement beside the
 existing Orin global IDs. It does not yet record or train a model; the mono
 votes are matched to RGB tracks by timestamp and projected center, so missing
-evidence stays unknown. The installed 0.8.15 app is the rollback baseline.
+evidence stays unknown. The retained 0.10.8 app is the current rollback baseline.
 Version 0.9.1 lets Targets Only and the L2 spatial field swap between the
 main pane and PiP, matching the Color and Mono controls.
 Version 0.9.2 shows object names beside the spatial target dots; IDs remain in
@@ -22,6 +22,10 @@ Version 0.10.8 moves the secondary view below the unobstructed main view,
 beside a compact two-column target index. PiP swaps and lab switches retain
 the current RGB iframe. In Spatial mode, the two mono detection passes are
 paused; Training Lab enables them again through `/api/lab-mode`.
+Version 0.11 adds an optional on-camera DINOv3 ViT Small embedding stage for
+selected YOLO object crops. The Orin stores vectors with global identities and
+reports cosine-similarity candidates. Appearance evidence does not yet change
+the Orin's identity assignments.
 
 The first live v0.9.0 check on 2026-10-25 showed about 30 RGB result passes/s,
 roughly 10 distinct mono result timestamps/s on each side, and actual mono
@@ -38,6 +42,17 @@ The v0.9.3 package SHA-256 is
 `86d164b1ac1591ce3e5fc7cc03b5add8f2bdc13ecfc1c53411c0262d06f88abe`.
 The live v0.10.8 package SHA-256 is
 `cc2850ae7a5352b2bcef15c34e2df5a4545c643f0c6b142ab0ad7a383f955764`.
+The live v0.11.3 package SHA-256 is
+`f830f7b413c93bd078f84e569ea2cc95288d6f31172eb340f47257ed70931738`.
+
+On 2026-10-26, the v0.11 trial later reached 123/123 completed DINO crops
+with no reported errors while the scene feed measured 30.1 results/s; the
+latest sampled crop took 51 ms.
+In a separate 3-second mode check, Training Lab left the DINO sent count at
+31 while the left and right mono detectors both returned detections and the
+RGB feed measured 29.6 results/s. Returning to Spatial Lab resumed DINO
+sampling. These are short live checks in one indoor scene, not accuracy or
+thermal endurance benchmarks.
 
 | View | Browser data | Detection toggle |
 | --- | --- | --- |
@@ -85,16 +100,21 @@ as useful for stereo matching on low-texture surfaces.
   timestamps, boxes, IDs, labels, XYZ, range, and track state. No video frames
   or recordings are saved by this app.
 
-The Spatial all-star trial adds optional `OAK4_FEATURE_TRACKING=1` and
+The Spatial trial adds optional `OAK4_FEATURE_TRACKING=1` and
 `OAK4_RGB_CROPS=1` paths plus `/api/features` and `/api/crop/<track_id>.jpg`.
-Both paths default **off** in v0.10.8. A two-camera FeatureTracker trial
+Both paths default **off**. A two-camera FeatureTracker trial
 crashed the RVC4 firmware during startup, including after the mono input was
 converted through ImageManip; it requires an isolated one-camera resource
 test before activation. The crop path is implemented but has not been tested
-on a running camera. No DINOv3 embedding worker, NeuralAssistedStereo
-comparison, or calibrated camera-to-L2 point fusion is running yet. The
-official DINOv3 checkpoint also requires model access. These trial paths do
-not create long-lived appearance identities or semantic L2 labels.
+on a running camera. The DINOv3 stage is enabled with `OAK4_DINO=1`; it
+uses the bundled Luxonis RVC4 variant `dinov3-backbone:vit-small-384x288`.
+Spatial Lab selects at most three current RGB tracks per second; Training Lab
+pauses DINO sampling while enabling the two mono detectors. DINO mean-pools each
+dense feature map into a 384-value unit vector. `/api/dino` reports crop and
+inference counts, errors, and latest latency. The Orin's identity endpoint
+reports the latest appearance candidate and repeat cosine, but does not merge
+IDs from appearance yet. NeuralAssistedStereo comparison and calibrated
+camera-to-L2 point fusion are still pending.
 
 See [the architecture](../../docs/architecture.md) for the processing graph,
 browser delivery, and result format.
@@ -111,11 +131,12 @@ export ORIN_WIRED_IP=192.168.50.2
 mkdir -p /data/oak4/packages
 oakctl app build apps/spatial-segmentation --device "$OAK_DEVICE" \
   --output /data/oak4/packages
-oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-10-8.oakapp \
+oakctl app install /data/oak4/packages/com-sauce-oak4-perception_0-11-3.oakapp \
   --device "$OAK_DEVICE" --force-new --start false --enable false \
   --env ORIN_RESULT_HOST="$ORIN_WIRED_IP" --env OAK4_FPS=30 \
   --env OAK4_SCAN_MODE=full --env OAK4_VIDEO_SCALE=4 \
-  --env OAK4_VIDEO_BITRATE_KBPS=60000 --env OAK4_MONO_FPS=10
+  --env OAK4_VIDEO_BITRATE_KBPS=60000 --env OAK4_MONO_FPS=10 \
+  --env OAK4_DINO=1
 oakctl app list --format json --device "$OAK_DEVICE"
 oakctl app start APP_ID_FROM_LIST --device "$OAK_DEVICE"
 ```

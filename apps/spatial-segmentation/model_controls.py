@@ -191,11 +191,12 @@ class InferenceRateControl:
 
 
 class LabModeControl:
-    """Feed mono detector nodes only while Training Lab is selected."""
+    """Switch mono detections and DINO crop sampling with the selected lab."""
 
-    def __init__(self, queues, buffer_factory):
+    def __init__(self, queues, buffer_factory, dino_state=None):
         self.queues = queues
         self.buffer_factory = buffer_factory
+        self.dino_state = dino_state
         self.lock = threading.Lock()
         self.training = False
 
@@ -213,6 +214,8 @@ class LabModeControl:
                 message = self.buffer_factory()
                 message.setData([1 if value else 0])
                 queue.send(message)
+            if self.dino_state is not None:
+                self.dino_state.set_enabled(not value)
             self.training = value
             return {"training": self.training}
 
@@ -257,7 +260,7 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                  zoom_control: ZoomControl | None = None,
                  inference_control: InferenceRateControl | None = None,
                  lab_mode_control: LabModeControl | None = None,
-                 feature_state=None, crop_store=None):
+                 feature_state=None, crop_store=None, dino_state=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format_string: str, *args) -> None:
             LOG.debug(format_string, *args)
@@ -344,6 +347,10 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
             elif self.path == "/api/features" and feature_state is not None:
                 self.respond(200, json.dumps(feature_state.read()).encode(),
                              "application/json")
+            elif self.path == "/api/dino":
+                result = (dino_state.report() if dino_state is not None else
+                          {"enabled": False, "sent": 0, "completed": 0})
+                self.respond(200, json.dumps(result).encode(), "application/json")
             elif (self.path.startswith("/api/crop/") and
                   crop_store is not None and scene_state is not None):
                 name = self.path.removeprefix("/api/crop/")
@@ -437,6 +444,7 @@ def start_control_server(parser, config_queue, config_factory,
                          lab_mode_control: LabModeControl | None = None,
                          feature_state=None,
                          crop_store=None,
+                         dino_state=None,
                          ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer(("0.0.0.0", port),
                                  make_handler(ModelControls(
@@ -448,7 +456,8 @@ def start_control_server(parser, config_queue, config_factory,
                                  inference_control=inference_control,
                                  lab_mode_control=lab_mode_control,
                                  feature_state=feature_state,
-                                 crop_store=crop_store))
+                                 crop_store=crop_store,
+                                 dino_state=dino_state))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     LOG.info("Live model controls listening on port %s", port)

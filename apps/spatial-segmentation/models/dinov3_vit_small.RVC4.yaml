@@ -1,0 +1,2 @@
+model: luxonis/dinov3-backbone:vit-small-384x288
+platform: RVC4

@@ -68,11 +68,18 @@ class FakeCropStore:
 class ModelControlTests(unittest.TestCase):
     def test_lab_mode_gates_both_mono_models(self):
         queues = [FakeQueue(), FakeQueue()]
-        mode = LabModeControl(queues, FakeBuffer)
+        class DinoGate:
+            enabled = True
+            def set_enabled(self, enabled):
+                self.enabled = enabled
+        dino = DinoGate()
+        mode = LabModeControl(queues, FakeBuffer, dino_state=dino)
         self.assertEqual(mode.read(), {"training": False})
         self.assertEqual(mode.apply({"training": True}), {"training": True})
+        self.assertFalse(dino.enabled)
         self.assertEqual([queue.sent[-1].data for queue in queues], [[1], [1]])
         self.assertEqual(mode.apply({"training": False}), {"training": False})
+        self.assertTrue(dino.enabled)
         self.assertEqual([queue.sent[-1].data for queue in queues], [[0], [0]])
         for invalid in ({"training": 1}, {"training": "yes"}, {},
                         {"training": True, "other": 1}):

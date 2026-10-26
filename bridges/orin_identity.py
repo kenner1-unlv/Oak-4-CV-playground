@@ -17,6 +17,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
+DINO_MODEL = "luxonis/dinov3-backbone:vit-small-384x288"
+
+
 def box_iou(a, b):
     x0, y0 = max(a[0], b[0]), max(a[1], b[1])
     x1, y1 = min(a[2], b[2]), min(a[3], b[3])
@@ -62,6 +65,9 @@ class IdentityResolver:
         self.reid_events = 0
         self.recent_reid = deque(maxlen=8)
         self.pending: dict[int, dict] = {}
+        self.appearance: dict[int, dict] = {}
+        self.appearance_by_source: dict[int, dict] = {}
+        self.latest_appearance: dict | None = None
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,7 +75,10 @@ class IdentityResolver:
                 "identities": [asdict(item) for item in self.identities.values()],
                 "source_to_global": self.source_to_global,
                 "last_frame_id": self.last_frame_id,
-                "last_device_ns": self.last_device_ns}
+                "last_device_ns": self.last_device_ns,
+                "appearance": {str(key): value for key, value in sorted(
+                    self.appearance.items(), key=lambda pair:
+                    pair[1]["updated_at"], reverse=True)[:256]}}
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(body, separators=(",", ":")),
                              encoding="utf-8")
@@ -105,6 +114,67 @@ class IdentityResolver:
             }
         self.last_frame_id = body.get("last_frame_id")
         self.last_device_ns = body.get("last_device_ns")
+        self.appearance = {
+            int(key): value for key, value in body.get("appearance", {}).items()
+            if int(key) in identities and value.get("model") == DINO_MODEL and
+            isinstance(value.get("embedding"), list) and
+            len(value["embedding"]) == 384
+        }
+
+    def ingest_embedding(self, packet: dict, now: float | None = None) -> dict:
+        if (packet.get("schema_version") != 1 or
+            packet.get("kind") != "appearance_embedding" or
+            packet.get("model") != DINO_MODEL or
+            not isinstance(packet.get("track_id"), int) or
+            not isinstance(packet.get("embedding"), list) or
+            len(packet["embedding"]) != 384):
+            raise ValueError("invalid appearance record")
+        values = packet["embedding"]
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) for value in values):
+            raise ValueError("invalid embedding values")
+        norm = math.sqrt(sum(value * value for value in values))
+        if not 0.9 <= norm <= 1.1:
+            raise ValueError("embedding is not unit length")
+        now = time.time() if now is None else now
+        track_id = packet["track_id"]
+        record = {"model": DINO_MODEL,
+                  "embedding": [round(value / norm, 6) for value in values],
+                  "label": packet.get("label"), "updated_at": now,
+                  "frame_id": packet.get("frame_id"),
+                  "device_timestamp_ns": packet.get("device_timestamp_ns")}
+        self.appearance_by_source[track_id] = record
+        global_id = self.source_to_global.get(track_id)
+        return self._attach_appearance(track_id, global_id, record)
+
+    def _attach_appearance(self, track_id, global_id, record):
+        if global_id is None:
+            return {"track_id": track_id, "global_id": None,
+                    "model": DINO_MODEL, "candidates": []}
+        label = self.identities[global_id].label
+        previous = self.appearance.get(global_id)
+        repeat_cosine = (sum(a * b for a, b in zip(
+            record["embedding"], previous["embedding"]))
+            if previous is not None and previous["model"] == DINO_MODEL else None)
+        candidates = []
+        for other_id, other in self.appearance.items():
+            if other_id == global_id or other["model"] != DINO_MODEL or \
+                    other.get("label") != label:
+                continue
+            cosine = sum(a * b for a, b in zip(
+                record["embedding"], other["embedding"]))
+            candidates.append({"global_id": other_id,
+                               "cosine": round(cosine, 4)})
+        self.appearance[global_id] = record
+        result = {"track_id": track_id, "global_id": global_id,
+                  "model": DINO_MODEL, "candidates": sorted(
+                      candidates, key=lambda item: item["cosine"],
+                      reverse=True)[:3],
+                  "repeat_cosine": (round(repeat_cosine, 4)
+                                    if repeat_cosine is not None else None),
+                  "updated_at": record["updated_at"]}
+        self.latest_appearance = result
+        return result
 
     def _match_score(self, identity: Identity, obj: dict, now: float):
         dt = now - identity.last_seen
@@ -151,6 +221,7 @@ class IdentityResolver:
              device_ns < self.last_device_ns)):
             self.source_to_global.clear()  # Camera app restarted its IDs.
             self.pending.clear()
+            self.appearance_by_source.clear()
             self.restart_match_until = now + 5
         self.last_frame_id = frame_id
         self.last_device_ns = device_ns
@@ -164,6 +235,9 @@ class IdentityResolver:
         for source_id, pending in list(self.pending.items()):
             if now - pending["last"] > 2:
                 del self.pending[source_id]
+        for source_id, appearance in list(self.appearance_by_source.items()):
+            if now - appearance["updated_at"] > 5:
+                del self.appearance_by_source[source_id]
         assigned_global: set[int] = set()
         for obj in observed:
             source_id = obj["track_id"]
@@ -241,6 +315,9 @@ class IdentityResolver:
             identity.alternate_evidence_share = obj.get("alternate_evidence_share")
             identity.mono_evidence = obj.get("mono_evidence") or {}
             self.source_to_global[source_id] = identity.global_id
+            if source_id in self.appearance_by_source:
+                self._attach_appearance(source_id, identity.global_id,
+                                        self.appearance_by_source.pop(source_id))
             assigned_global.add(identity.global_id)
 
         recent = [item for item in self.identities.values()
@@ -259,6 +336,8 @@ class IdentityResolver:
             "pending_count": len(self.pending),
             "reid_events": self.reid_events,
             "recent_reid": list(self.recent_reid),
+            "appearance_count": len(self.appearance),
+            "latest_appearance": self.latest_appearance,
         }
 
 
@@ -307,7 +386,14 @@ class IdentityService:
                 data, _address = self.udp.recvfrom(65535)
                 packet = json.loads(data)
                 with self.lock:
-                    self.latest = self.resolver.ingest(packet)
+                    if packet.get("kind") == "appearance_embedding":
+                        self.resolver.ingest_embedding(packet)
+                        self.latest["appearance_count"] = len(
+                            self.resolver.appearance)
+                        self.latest["latest_appearance"] = (
+                            self.resolver.latest_appearance)
+                    else:
+                        self.latest = self.resolver.ingest(packet)
                     if time.monotonic() - self.last_save >= 5:
                         self.resolver.save(self.state_path)
                         self.last_save = time.monotonic()

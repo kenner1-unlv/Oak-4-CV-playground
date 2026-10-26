@@ -60,7 +60,17 @@ distance, image overlap, class, and elapsed time. The restart path allows a
 longer gap only with stricter geometry. A genuinely new ID requires three
 continuous observations spanning at least 0.35 seconds, so short false
 detections do not consume global ID numbers. Matching scores are heuristics, not
-probabilities, and no appearance model is running yet.
+probabilities.
+
+The v0.11 DINOv3 trial sends separate `appearance_embedding` datagrams to
+the same Orin UDP port. The camera samples at most three current RGB object
+crops per second and sends a 384-value unit vector with its source track ID,
+label, source frame ID, and device timestamp. The identity service attaches
+the vector to the current global ID and persists up to 256 recent identity
+vectors. `/identities` exposes the latest repeat cosine and up to three
+other same-label candidates. These are raw similarity measurements, **not**
+calibrated match probabilities. Appearance does not currently merge or
+reassign IDs; the existing geometry and class heuristic remains in control.
 
 Run it on the Orin independently of the full robot bringup:
 

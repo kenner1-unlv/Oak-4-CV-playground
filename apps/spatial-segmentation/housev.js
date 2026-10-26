@@ -729,6 +729,22 @@ async function pollFeatures() {
   setTimeout(pollFeatures,500);
 }
 
+async function pollDino() {
+  if (document.hidden) { setTimeout(pollDino, 1500); return; }
+  try {
+    const response = await fetch('/api/dino', {cache:'no-store'});
+    if (!response.ok) throw new Error(`DINO HTTP ${response.status}`);
+    const state = await response.json();
+    $('dino-status').hidden = !state.enabled;
+    if (state.enabled) $('dino-status').textContent =
+      `DINOv3 ${state.completed}/${state.sent} · ${state.latest?.latency_ms ?? '--'}MS`;
+  } catch (_error) {
+    $('dino-status').hidden = false;
+    $('dino-status').textContent = 'DINO OFFLINE';
+  }
+  setTimeout(pollDino, 1000);
+}
+
 function renderActive() {
   const live=latestScene?.age_ms!=null&&latestScene.age_ms<=1200;
   if(mode==='color') {
@@ -776,3 +792,4 @@ pollTelemetry();
 pollLidar();
 pollIdentities();
 pollFeatures();
+pollDino();

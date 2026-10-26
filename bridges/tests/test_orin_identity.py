@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from orin_identity import IdentityResolver
+from orin_identity import DINO_MODEL, IdentityResolver
 
 
 def observation(track_id, x=0, label="chair"):
@@ -20,6 +20,51 @@ def packet(frame_id, *objects):
 
 
 class IdentityTests(unittest.TestCase):
+    def test_dino_embedding_is_candidate_evidence_and_survives_restart(self):
+        resolver = IdentityResolver()
+        resolver.ingest(packet(1, observation(3)), now=100.0)
+        embedding = [1.0] + [0.0] * 383
+        evidence = resolver.ingest_embedding({
+            "schema_version": 1, "kind": "appearance_embedding",
+            "model": DINO_MODEL, "track_id": 3, "label": "chair",
+            "frame_id": 1, "device_timestamp_ns": 33_000_000,
+            "embedding": embedding,
+        }, now=100.1)
+        self.assertEqual(evidence["global_id"], 1)
+        self.assertEqual(evidence["candidates"], [])
+        repeat = resolver.ingest_embedding({
+            "schema_version": 1, "kind": "appearance_embedding",
+            "model": DINO_MODEL, "track_id": 3, "label": "chair",
+            "frame_id": 2, "device_timestamp_ns": 66_000_000,
+            "embedding": embedding,
+        }, now=100.2)
+        self.assertEqual(repeat["repeat_cosine"], 1.0)
+        resolver.ingest(packet(2, observation(8, x=3000)), now=101.0)
+        next_evidence = resolver.ingest_embedding({
+            "schema_version": 1, "kind": "appearance_embedding",
+            "model": DINO_MODEL, "track_id": 8, "label": "chair",
+            "frame_id": 2, "device_timestamp_ns": 66_000_000,
+            "embedding": embedding,
+        }, now=101.1)
+        self.assertEqual(next_evidence["candidates"],
+                         [{"global_id": 1, "cosine": 1.0}])
+        self.assertEqual(resolver.source_to_global[8], 2)
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "identities.json"
+            resolver.save(path)
+            restored = IdentityResolver()
+            restored.load(path)
+            self.assertEqual(len(restored.appearance), 2)
+
+    def test_invalid_appearance_is_rejected(self):
+        resolver = IdentityResolver()
+        with self.assertRaises(ValueError):
+            resolver.ingest_embedding({"schema_version": 1,
+                                       "kind": "appearance_embedding",
+                                       "model": DINO_MODEL,
+                                       "track_id": 3,
+                                       "embedding": [float("nan")] * 384})
+
     def test_reappearing_camera_track_gets_provisional_global_id(self):
         resolver = IdentityResolver()
         first = resolver.ingest(packet(1, observation(3)), now=100.0)
