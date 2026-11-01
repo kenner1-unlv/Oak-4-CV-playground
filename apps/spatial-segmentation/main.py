@@ -10,6 +10,7 @@ import cv2
 import depthai as dai
 import numpy as np
 from depthai_nodes.node import ParsingNeuralNetwork
+from depthai_nodes.node.parsers import HRNetParser
 from depthai_nodes.utils import AnnotationHelper
 
 from hud import rounded_brackets, target_lines
@@ -19,6 +20,7 @@ from model_controls import (IRProjectorControl, MonoFrameStore, SceneState,
 from feature_state import FeatureState
 from crop_store import RgbCropStore
 from dino_state import DinoState
+from pose_state import MODEL as POSE_MODEL, POSE_SIZE, PoseState
 from mono_evidence import MonoDetectionStore, match_projected_tracks
 from mono_projection import project_point
 from perception_core import Observation, SpatialEstimate, TrackManager, estimate_spatial
@@ -43,6 +45,9 @@ ENABLE_RGB_CROPS = os.getenv("OAK4_RGB_CROPS", "0") == "1"
 ENABLE_DINO = os.getenv("OAK4_DINO", "0") == "1"
 DINO_MODEL_YAML = Path(__file__).parent / "models/dinov3_vit_small.RVC4.yaml"
 DINO_SIZE = (384, 288)
+POSE_MODEL_YAML = Path(__file__).parent / "models/lite_hrnet_18coco.RVC4.yaml"
+POSE_FPS = int(os.getenv("OAK4_POSE_FPS", "20"))
+ENABLE_POSE = os.getenv("OAK4_POSE", "0") == "1"
 
 
 class MonoCaptureNode(dai.node.HostNode):
@@ -146,6 +151,65 @@ class DinoResultNode(dai.node.HostNode):
             LOG.warning("DINOv3 result unavailable: %s", exc)
 
 
+class PoseCropNode(dai.node.HostNode):
+    """Schedule bounded-rate HRNet crops from current person tracks."""
+
+    def __init__(self):
+        super().__init__()
+        self.crops = self.createOutput(possibleDatatypes=[
+            dai.Node.DatatypeHierarchy(dai.DatatypeEnum.ImgFrame, True)
+        ])
+
+    def build(self, frames, scene_state, pose_state):
+        self.scene_state = scene_state
+        self.pose_state = pose_state
+        self.link_args(frames)
+        return self
+
+    def process(self, frame: dai.ImgFrame) -> None:
+        timestamp_ns = int(frame.getTimestampDevice().total_seconds() * 1e9)
+        selected = self.pose_state.select(self.scene_state.read(), timestamp_ns)
+        if selected is None:
+            return
+        sequence, item = selected
+        image = frame.getCvFrame()
+        height, width = image.shape[:2]
+        x0, y0, x1, y1 = item["crop_box_xyxy_norm"]
+        left = max(0, min(width - 1, int(x0 * width)))
+        top = max(0, min(height - 1, int(y0 * height)))
+        right = max(left + 1, min(width, int(np.ceil(x1 * width))))
+        bottom = max(top + 1, min(height, int(np.ceil(y1 * height))))
+        crop = image[top:bottom, left:right]
+        if crop.size == 0:
+            self.pose_state.fail(sequence)
+            return
+        crop = cv2.resize(crop, POSE_SIZE, interpolation=cv2.INTER_LINEAR)
+        sample = dai.ImgFrame()
+        sample.setData(np.ascontiguousarray(crop))
+        sample.setWidth(POSE_SIZE[0])
+        sample.setHeight(POSE_SIZE[1])
+        sample.setType(dai.ImgFrame.Type.BGR888i)
+        sample.setTimestamp(frame.getTimestamp())
+        sample.setTimestampDevice(frame.getTimestampDevice())
+        sample.setSequenceNum(sequence)
+        self.crops.send(sample)
+
+
+class PoseResultNode(dai.node.HostNode):
+    """Store HRNet keypoints and keep failures visible in model status."""
+
+    def build(self, keypoints, pose_state):
+        self.pose_state = pose_state
+        self.link_args(keypoints)
+        return self
+
+    def process(self, message: dai.beta.Keypoints) -> None:
+        try:
+            self.pose_state.complete(message.getSequenceNum(), message)
+        except (AttributeError, TypeError, ValueError) as exc:
+            LOG.warning("Lite-HRNet pose result unavailable: %s", exc)
+
+
 class MonoDetectionNode(dai.node.HostNode):
     """Publish actual mono-network results, tagged with their source camera."""
 
@@ -215,6 +279,8 @@ class ResultNode(dai.node.HostNode):
         self.mono_projectors: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self.mono_detections: MonoDetectionStore | None = None
         self.zoom_tile: Tile | None = None
+        self.pose_state: PoseState | None = None
+        self.pose_edges: tuple[tuple[int, int], ...] = ()
 
     def build(
         self, detections: dai.Node.Output, point_cloud: dai.Node.Output,
@@ -223,6 +289,8 @@ class ResultNode(dai.node.HostNode):
         scene_state: SceneState,
         mono_projectors: dict[str, tuple[np.ndarray, np.ndarray]],
         mono_detections: MonoDetectionStore,
+        pose_state: PoseState,
+        pose_edges: tuple[tuple[int, int], ...],
     ) -> "ResultNode":
         self.labels = labels
         self.tiles = tiles
@@ -237,6 +305,8 @@ class ResultNode(dai.node.HostNode):
         self.scene_state = scene_state
         self.mono_projectors = mono_projectors
         self.mono_detections = mono_detections
+        self.pose_state = pose_state
+        self.pose_edges = pose_edges
         self.link_args(detections, point_cloud, tile_ids)
         host = os.getenv("ORIN_RESULT_HOST", "").strip()
         if host:
@@ -458,6 +528,17 @@ class ResultNode(dai.node.HostNode):
                     }
             record["mono_evidence"] = evidence
             scene_object["mono_evidence"] = evidence
+        for pose in self.pose_state.overlays(device_timestamp_ns):
+            points = pose["keypoints"]
+            for first, second in self.pose_edges:
+                if (first >= len(points) or second >= len(points) or
+                        points[first][2] < 0.3 or points[second][2] < 0.3):
+                    continue
+                annotations.draw_line(
+                    (points[first][0], points[first][1]),
+                    (points[second][0], points[second][1]),
+                    color=(0.18, 0.92, 0.78, 0.95), thickness=3,
+                )
         self.annotations.send(
             annotations.build(message.getTimestamp(), message.getSequenceNum())
         )
@@ -506,6 +587,8 @@ def main() -> None:
         raise ValueError("OAK4_MONO_FPS must be 1..OAK4_FPS")
     if not 1 <= RGB_CROP_FPS <= FPS:
         raise ValueError("OAK4_RGB_CROP_FPS must be 1..OAK4_FPS")
+    if not 1 <= POSE_FPS <= 20:
+        raise ValueError("OAK4_POSE_FPS must be 1..20")
     archive = dai.NNArchive(
         dai.getModelFromZoo(dai.NNModelDescription.fromYamlFile(str(MODEL_YAML)))
     )
@@ -538,8 +621,23 @@ def main() -> None:
     )) if ENABLE_DINO else None)
     if dino_archive is not None and dino_archive.getInputSize() != DINO_SIZE:
         raise ValueError("Unexpected DINOv3 input size")
+    pose_archive = dai.NNArchive(dai.getModelFromZoo(
+        dai.NNModelDescription.fromYamlFile(str(POSE_MODEL_YAML))
+    ))
+    if pose_archive.getInputSize() != POSE_SIZE:
+        raise ValueError("Unexpected Lite-HRNet input size")
+    pose_head = pose_archive.getConfig().model.heads[0]
+    pose_edges = tuple(tuple(int(index) for index in edge)
+                       for edge in pose_head.metadata.extraParams.get(
+                           "skeleton_edges", []
+                       ))
+    if not pose_edges:
+        raise ValueError("Lite-HRNet archive is missing skeleton edges")
     scene_state = SceneState()
     dino_state = DinoState() if ENABLE_DINO else None
+    pose_state = PoseState(enabled=ENABLE_POSE,
+                           max_per_second=POSE_FPS,
+                           skeleton_edges=pose_edges)
     mono_frames = MonoFrameStore()
     mono_detections = MonoDetectionStore()
     feature_state = FeatureState()
@@ -729,6 +827,7 @@ while True:
             nn.out, rgbd.pcl, script.outputs["tile"],
             labels, tiles, canvas_size, video_size,
             scene_state, mono_projectors, mono_detections,
+            pose_state, pose_edges,
         )
 
         if dino_archive is not None:
@@ -741,6 +840,18 @@ while True:
             pipeline.create(DinoResultNode).build(
                 dino_nn.out, dino_state
             )
+
+        pose_crop = pipeline.create(PoseCropNode).build(
+            tile_source, scene_state, pose_state
+        )
+        pose_nn = pipeline.create(ParsingNeuralNetwork).build(
+            pose_crop.crops, pose_archive
+        )
+        pose_nn.input.setBlocking(False)
+        pose_nn.input.setMaxSize(1)
+        pose_parser: HRNetParser = pose_nn.getParser(0)
+        pose_parser.setScoreThreshold(0.0)
+        pipeline.create(PoseResultNode).build(pose_nn.out, pose_state)
 
         video = color.requestOutput(
             video_size, dai.ImgFrame.Type.NV12, fps=FPS,
@@ -765,7 +876,8 @@ while True:
             on_change=results.tracks.set_inference_rate,
         )
         lab_mode_control = LabModeControl(mono_gate_queues, dai.Buffer,
-                                          dino_state=dino_state)
+                                          dino_state=dino_state,
+                                          pose_state=pose_state)
         ir_projector = IRProjectorControl(device)
         try:
             ir_projector.apply({"enabled": True, "intensity": 0.5})
@@ -781,6 +893,7 @@ while True:
             feature_state=feature_state,
             crop_store=crop_store,
             dino_state=dino_state,
+            pose_state=pose_state,
         )
         LOG.info(
             "Perception pipeline running: target=%s fps, video=%sx%s, "

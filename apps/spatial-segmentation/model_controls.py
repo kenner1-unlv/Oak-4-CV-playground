@@ -193,10 +193,12 @@ class InferenceRateControl:
 class LabModeControl:
     """Switch mono detections and DINO crop sampling with the selected lab."""
 
-    def __init__(self, queues, buffer_factory, dino_state=None):
+    def __init__(self, queues, buffer_factory, dino_state=None,
+                 pose_state=None):
         self.queues = queues
         self.buffer_factory = buffer_factory
         self.dino_state = dino_state
+        self.pose_state = pose_state
         self.lock = threading.Lock()
         self.training = False
 
@@ -216,6 +218,8 @@ class LabModeControl:
                 queue.send(message)
             if self.dino_state is not None:
                 self.dino_state.set_enabled(not value)
+            if self.pose_state is not None:
+                self.pose_state.set_training(value)
             self.training = value
             return {"training": self.training}
 
@@ -260,7 +264,8 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                  zoom_control: ZoomControl | None = None,
                  inference_control: InferenceRateControl | None = None,
                  lab_mode_control: LabModeControl | None = None,
-                 feature_state=None, crop_store=None, dino_state=None):
+                 feature_state=None, crop_store=None, dino_state=None,
+                 pose_state=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format_string: str, *args) -> None:
             LOG.debug(format_string, *args)
@@ -351,6 +356,11 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                 result = (dino_state.report() if dino_state is not None else
                           {"enabled": False, "sent": 0, "completed": 0})
                 self.respond(200, json.dumps(result).encode(), "application/json")
+            elif self.path == "/api/pose":
+                result = (pose_state.read() if pose_state is not None else
+                          {"enabled": False, "requested": False, "sent": 0,
+                           "completed": 0, "errors": 0})
+                self.respond(200, json.dumps(result).encode(), "application/json")
             elif (self.path.startswith("/api/crop/") and
                   crop_store is not None and scene_state is not None):
                 name = self.path.removeprefix("/api/crop/")
@@ -398,7 +408,8 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
 
         def do_PUT(self) -> None:
             if self.path not in ("/api/model", "/api/ir", "/api/zoom",
-                                 "/api/inference", "/api/lab-mode"):
+                                 "/api/inference", "/api/lab-mode",
+                                 "/api/pose"):
                 self.respond(404, b"Not found", "text/plain")
                 return
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -421,6 +432,8 @@ def make_handler(controls: ModelControls, viewer_port: int = 8084,
                 elif (self.path == "/api/lab-mode" and
                       lab_mode_control is not None):
                     result = lab_mode_control.apply(payload)
+                elif self.path == "/api/pose" and pose_state is not None:
+                    result = pose_state.apply(payload)
                 else:
                     self.respond(404, b"Not found", "text/plain")
                     return
@@ -445,6 +458,7 @@ def start_control_server(parser, config_queue, config_factory,
                          feature_state=None,
                          crop_store=None,
                          dino_state=None,
+                         pose_state=None,
                          ) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer(("0.0.0.0", port),
                                  make_handler(ModelControls(
@@ -457,7 +471,8 @@ def start_control_server(parser, config_queue, config_factory,
                                  lab_mode_control=lab_mode_control,
                                  feature_state=feature_state,
                                  crop_store=crop_store,
-                                 dino_state=dino_state))
+                                 dino_state=dino_state,
+                                 pose_state=pose_state))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     LOG.info("Live model controls listening on port %s", port)

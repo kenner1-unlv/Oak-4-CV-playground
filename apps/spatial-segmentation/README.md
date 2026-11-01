@@ -116,6 +116,20 @@ reports the latest appearance candidate and repeat cosine, but does not merge
 IDs from appearance yet. NeuralAssistedStereo comparison and calibrated
 camera-to-L2 point fusion are still pending.
 
+An optional Lite-HRNet 18-keypoint COCO pose stage is exposed by the **POSE**
+control and `/api/pose`. It samples up to 20 fresh tracked person crops per
+second, defaults off, and pauses in Training Lab. The model is still loaded
+into the pipeline at startup to support live toggling, so the disabled state
+limits inference work but does not remove its model allocation. Pose overlays
+are experimental and have not been validated for accuracy or sustained thermal
+load on the live camera.
+
+The v0.12.3 live check on 2026-11-01 confirmed skeleton joints and limbs drawn
+over the person in House V. A five-second sample completed 75 pose crops (15/s)
+with a 20/s cap; the latest inference took 21 ms, with no pose errors. The scene
+feed remained at 29.8 results/s. This is an observed short-run rate, not a
+sustained throughput or pose-accuracy benchmark.
+
 See [the architecture](../../docs/architecture.md) for the processing graph,
 browser delivery, and result format.
 

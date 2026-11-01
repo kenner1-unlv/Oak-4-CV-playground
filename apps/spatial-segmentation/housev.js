@@ -20,6 +20,8 @@ let pipMain = 'video';
 let latestScene = null;
 let latestIdentities = null;
 let latestFeatures = null;
+let latestPose = null;
+let latestPoseAt = 0;
 let labModeRequest = 0;
 let indexMode = 'nearest';
 const smoothedTracks = new Map();
@@ -126,6 +128,28 @@ $('ir-intensity').addEventListener('change', async () => {
   catch (error) { setConnection('IR ERROR', false); console.warn(error); }
 });
 fetch('/api/ir').then(r => r.json()).then(syncIR).catch(() => {});
+
+function syncPose(state) {
+  const previousStamp = latestPose?.latest?.device_timestamp_ns;
+  if (state.latest && state.latest.device_timestamp_ns !== previousStamp)
+    latestPoseAt = Date.now();
+  latestPose = state;
+  const button = $('pose-toggle');
+  button.setAttribute('aria-pressed', String(state.requested));
+  if (state.training && state.requested) button.textContent = 'POSE PAUSED';
+  else if (!state.enabled) button.textContent = 'POSE OFF';
+  else button.textContent =
+    `POSE ${state.completed}/${state.sent} Â· ${state.latest?.latency_ms ?? '--'}MS`;
+}
+$('pose-toggle').addEventListener('click', async () => {
+  try {
+    const state = latestPose || await fetch('/api/pose').then(response => response.json());
+    syncPose(await sendJson('/api/pose', {enabled: !state.requested}));
+  } catch (error) {
+    $('pose-toggle').textContent = 'POSE ERROR';
+    console.warn('Pose control unavailable', error);
+  }
+});
 
 function syncZoom(state) {
   $('zoom-x').value = state.center_x;
@@ -509,6 +533,51 @@ function drawHud(canvas, scene, darkBackground) {
   }
 }
 
+function drawPose(canvas) {
+  const pose = latestPose?.latest;
+  if (!canvas || !latestPose?.enabled || !pose?.keypoints ||
+      Date.now() - latestPoseAt > 350) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const points = pose.keypoints;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.shadowColor = '#00ffe1';
+  ctx.shadowBlur = 11;
+  ctx.strokeStyle = 'rgba(0,18,28,.96)';
+  ctx.lineWidth = Math.max(8, W * .0045);
+  for (const [a,b] of latestPose.skeleton_edges || []) {
+    if (!points[a] || !points[b] || points[a][2] < .18 || points[b][2] < .18)
+      continue;
+    ctx.beginPath();
+    ctx.moveTo(points[a][0] * W, points[a][1] * H);
+    ctx.lineTo(points[b][0] * W, points[b][1] * H);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = '#00ffe1';
+  ctx.lineWidth = Math.max(4, W * .0024);
+  for (const [a,b] of latestPose.skeleton_edges || []) {
+    if (!points[a] || !points[b] || points[a][2] < .18 || points[b][2] < .18)
+      continue;
+    ctx.beginPath();
+    ctx.moveTo(points[a][0] * W, points[a][1] * H);
+    ctx.lineTo(points[b][0] * W, points[b][1] * H);
+    ctx.stroke();
+  }
+  for (const [x,y,confidence] of points) {
+    if (confidence < .18) continue;
+    ctx.beginPath();
+    ctx.arc(x * W, y * H, Math.max(5, W * .003), 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.strokeStyle = '#00ffe1';
+    ctx.lineWidth = Math.max(3, W * .0018);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawMonoMarkers(canvas, scene, source) {
   if (!canvas) return;
   const ctx=canvas.getContext('2d');ctx.clearRect(0,0,640,400);
@@ -745,6 +814,19 @@ async function pollDino() {
   setTimeout(pollDino, 1000);
 }
 
+async function pollPose() {
+  if (document.hidden) { setTimeout(pollPose, 1500); return; }
+  try {
+    const response = await fetch('/api/pose', {cache:'no-store'});
+    if (!response.ok) throw new Error(`Pose HTTP ${response.status}`);
+    syncPose(await response.json());
+  } catch (error) {
+    $('pose-toggle').textContent = 'POSE OFFLINE';
+    console.warn('Pose status unavailable', error);
+  }
+  setTimeout(pollPose, 50);
+}
+
 function renderActive() {
   const live=latestScene?.age_ms!=null&&latestScene.age_ms<=1200;
   if(mode==='color') {
@@ -754,6 +836,7 @@ function renderActive() {
       if(pipMain==='video') {
         if(showLocks)drawHud(canvas,latestScene,false);
         drawLidar(canvas);
+        drawPose(canvas);
       }
     }
   } else if(mode==='left'||mode==='right') {
@@ -764,6 +847,7 @@ function renderActive() {
     const canvas=view.querySelector('.detections-pane canvas');
     drawHud(canvas,latestScene,true);
     drawLidar(canvas);
+    drawPose(canvas);
   }
   updateTargetIndex(latestScene);
   drawSpatialMap(latestScene);
@@ -774,7 +858,7 @@ function renderActive() {
 }
 async function pollTelemetry() {
   if (document.hidden) { setTimeout(pollTelemetry, 1000); return; }
-  let nextPollMs = 100;
+  let nextPollMs = 50;
   try {
     const response=await fetch('/api/scene',{cache:'no-store'});
     if(!response.ok)throw new Error(`HTTP ${response.status}`);
@@ -793,3 +877,4 @@ pollLidar();
 pollIdentities();
 pollFeatures();
 pollDino();
+pollPose();

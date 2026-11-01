@@ -13,6 +13,7 @@ from model_controls import (IRProjectorControl, ModelControls, MonoFrameStore,
                             LabModeControl,
                             make_handler)
 from feature_state import FeatureState
+from pose_state import PoseState
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -66,6 +67,60 @@ class FakeCropStore:
 
 
 class ModelControlTests(unittest.TestCase):
+    def test_pose_state_schedules_only_fresh_tracked_people(self):
+        state = PoseState(max_per_second=2)
+        state.apply({"enabled": True})
+        now = 10_000_000_000
+        scene = {"age_ms": 10, "device_timestamp_ns": now,
+                 "frame_id": 42, "objects": [
+                     {"track_id": 2, "track_state": "tracked",
+                      "label": "person", "detector_score": 0.9,
+                      "bbox_xyxy_norm": [0.2, 0.1, 0.6, 0.9]},
+                     {"track_id": 3, "track_state": "held",
+                      "label": "person", "detector_score": 0.9,
+                      "bbox_xyxy_norm": [0.1, 0.1, 0.4, 0.8]},
+                 ]}
+        selected = state.select(scene, now)
+        self.assertIsNotNone(selected)
+        sequence, item = selected
+        self.assertEqual(item["track_id"], 2)
+        self.assertIsNone(state.select(scene, now))
+        state.set_training(True)
+        self.assertFalse(state.read()["enabled"])
+        state.set_training(False)
+        self.assertTrue(state.read()["enabled"])
+
+    def test_pose_http_get_put_and_validation(self):
+        controls = ModelControls(FakeParser(), FakeQueue(), FakeConfig)
+        pose = PoseState(skeleton_edges=((0, 1), (1, 2)))
+        server = ThreadingHTTPServer(
+            ("127.0.0.1", 0), make_handler(controls, pose_state=pose))
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with urlopen(base + "/api/pose") as response:
+                initial_pose = json.load(response)
+                self.assertFalse(initial_pose["requested"])
+                self.assertEqual(initial_pose["skeleton_edges"],
+                                 [[0, 1], [1, 2]])
+            request = Request(base + "/api/pose", data=b'{"enabled":true}',
+                              headers={"Content-Type": "application/json"},
+                              method="PUT")
+            with urlopen(request) as response:
+                self.assertTrue(json.load(response)["enabled"])
+            request = Request(base + "/api/pose", data=b'{"enabled":1}',
+                              headers={"Content-Type": "application/json"},
+                              method="PUT")
+            with self.assertRaises(HTTPError) as error:
+                urlopen(request)
+            self.assertEqual(error.exception.code, 400)
+            error.exception.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join()
+
     def test_lab_mode_gates_both_mono_models(self):
         queues = [FakeQueue(), FakeQueue()]
         class DinoGate:
