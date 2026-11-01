@@ -130,6 +130,21 @@ with a 20/s cap; the latest inference took 21 ms, with no pose errors. The scene
 feed remained at 29.8 results/s. This is an observed short-run rate, not a
 sustained throughput or pose-accuracy benchmark.
 
+A separate 16-second headroom check on 2026-11-01 sampled the live status API.
+With Vision Lab running RGB at 30 FPS, pose at a 20/s cap, and DINO enabled,
+scene results averaged 30.1 FPS (50 ms p95 scene-result age). Pose completed
+289 crops (~19.3/s; latest latency 23 ms) with no new errors. A separate timed
+15.24-second counter sample completed 42 DINO crops (~2.8/s; latest latency
+57 ms) with no new errors. In Training Lab, RGB
+averaged 30.0 FPS (35 ms p95 age) while both mono paths were enabled and pose
+and DINO were paused as designed. Both mono sides showed changing synchronized
+detection timestamps, but the 1 Hz status polling was too sparse to measure
+their inference rates. Vision Lab was restored after the check, and live status
+confirmed pose active with zero errors. This test did not sample device
+utilization, temperature, dropped camera frames, accuracy, or sustained load;
+it establishes only short-run observed throughput, not spare-compute or
+thermal headroom.
+
 See [the architecture](../../docs/architecture.md) for the processing graph,
 browser delivery, and result format.
 

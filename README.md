@@ -74,6 +74,30 @@ latency, dropped frames, and accuracy on the same labeled scenes. Luxonis
 documents RVC4's [neural and vision hardware](https://docs.luxonis.com/hardware/platform/rvc/rvc4),
 but its peak benchmarks are not a measurement of headroom in this app.
 
+### Short-run headroom check (2026-11-01)
+
+Two 16-second live samples were taken through the local `127.0.0.1:8082` API
+against deployed app v0.12.3 on OAK4-D (serial `1821435411`). Vision Lab ran
+RGB at its 30 FPS target with pose enabled (20 crops/s maximum) and DINOv3
+enabled (up to three selected tracks/s). Training Lab ran RGB and enabled both
+mono detector paths; pose and DINO pause in that mode.
+
+| Mode | Scene results | Pose | DINO | Other observation |
+| --- | --- | --- | --- | --- |
+| Vision Lab | 30.1 FPS average; scene age p95 50 ms | 289 completed crops (~19.3/s); latest latency 23 ms; 0 new errors | A separate timed 15.24-second counter sample completed 42 crops (~2.8/s); latest latency 57 ms; 0 new errors | RGB stayed at its configured target while both optional stages were active. |
+| Training Lab | 30.0 FPS average; scene age p95 35 ms | Paused as designed | Paused as designed | Both mono sides produced changing synchronized detection timestamps during the sample; this 1 Hz status poll cannot establish their FPS. |
+
+After the sample, the app was returned to Vision Lab; live status confirmed
+pose enabled and requested, Training Lab off, and zero pose errors. These short
+samples show no observed reduction in RGB result rate under the tested modes.
+They do not quantify spare neural capacity, peak throughput, dropped camera
+frames, accuracy, Orin load, device temperature, or sustained thermal headroom.
+The pose sample reached about 97% of its configured 20/s cap, so its sampling
+rate itself has little configured room to increase without changing that cap.
+The earlier mono timestamp sample remains the better mono-rate observation
+(47 left and 49 right timestamps in five seconds); this check does not replace
+it with a reliable mono FPS measurement.
+
 ## Next experiments
 
 The first Mode 2 follow-up is **cross-camera identity fusion**: preserve every
