@@ -7,14 +7,38 @@ House V is the browser interface for comparing views and models. This is an
 experimental portfolio project: labels, distances, and IDs still need
 labeled-scene evaluation.
 
-**Current release:** v0.9.3 runs on the OAK and is enabled for boot. The
-tested v0.9.2 and v0.8.15 apps remain installed for rollback. The two browser
-modes below share one installed camera pipeline. They are different ways to
-inspect its results, not independently deployed apps.
+**Engineering focus:** integrate on-camera inference, stereo range, compact
+network results, Orin-side identity tracking, and a browser view without
+turning unvalidated detections into ground truth. The project shows how to
+measure throughput, expose conflicting sensor evidence, and design the next
+evaluation before claiming accuracy. Start with the [architecture](docs/architecture.md),
+[experiment menu](docs/experiments.md), and [known limits](#known-limits).
+
+**Repository app version:** v0.12.3. The latest documented live check ran this
+version on the OAK on 2026-11-01. The two browser modes share one camera
+pipeline and switch which optional model stages run.
+
+## What the lab shows
+
+- **Object outlines and range:** YOLOv8 Large segmentation draws RGB-aligned
+  mask contours and target labels; stereo depth estimates each target's range.
+- **Multiple camera views:** Color, left mono, right mono, and Targets Only can
+  share the page with the sampled Unitree L2 field. Mono views project target
+  centers from calibration; they do not display RGB mask contours as mono masks.
+- **Model comparison:** Training Lab adds independent left and right mono
+  detections and shows agreement, disagreement, or missing evidence per target.
+- **Optional person and identity evidence:** Vision Lab can draw Lite-HRNet
+  pose keypoints on tracked people and sample DINOv3 object embeddings. The
+  Orin stores appearance candidates without changing provisional IDs from them.
+
+The three screenshots below show the earlier v0.9.2 viewer and its outlines,
+mono projection, and model comparison. They do not show the newer pose and
+DINO controls.
 
 ## Mode 1 — Vision Lab
 
-The [spatial viewer](http://127.0.0.1:8082/) shows YOLOv8 Large instance
+The spatial viewer, served locally at `http://127.0.0.1:8082/` after the
+[lab setup](docs/lab-setup.md), shows YOLOv8 Large instance
 segmentation, stereo-derived range, short-term tracks, and an unaligned
 Unitree L2 preview. Switch among Color, Left mono, Right mono, and Targets
 Only. Any source can swap with the top-down spatial field between the main
@@ -34,7 +58,7 @@ attempted across camera track churn, not a confidence score.
 
 ## Mode 2 — Training Lab
 
-The Training Lab tab in the [same House V page](http://127.0.0.1:8082/)
+The Training Lab tab in the same locally hosted House V page
 uses the same camera and PiP controls without opening another viewer. It adds
 independent YOLOv6 Nano detections on the left and
 right mono cameras. The target index shows `+` when a geometrically matched
@@ -116,12 +140,12 @@ with distinct jobs are:
 | --- | --- | --- |
 | [Feature tracking / optical flow](https://docs.luxonis.com/software-v3/depthai/depthai-components/nodes/feature_tracker/) | Motion and stable image features on the mono pair | Do features help reattach an object after a detector drops it? |
 | [Neural stereo depth](https://docs.luxonis.com/software-v3/depthai/examples/neural_depth/neural_depth/) | A learned depth estimate alongside classical stereo | Compare range coverage and error on plain walls, dark fabric, and reflective objects. |
-| [Human pose](https://github.com/luxonis/oak-examples/blob/main/neural-networks/pose-estimation/human-pose/README.md) | Body keypoints rather than another person box | Measure whether pose adds useful orientation or motion cues for people. |
+| Human pose follow-up | Body keypoints now appear for sampled tracked people in Vision Lab | Measure pose accuracy and whether keypoints improve orientation or motion cues. |
 | Scene surfaces | Floor, wall, and obstacle regions rather than COCO object classes | Build a labeled indoor scene set and compare mask boundaries before semantic LiDAR projection. |
 
-These are options for separate trials, not models claimed to run together
-today. A fixed camera-to-L2 mount, measured transform, and timestamp alignment
-are needed before assigning camera labels to LiDAR points.
+The remaining candidates are separate trials; pose already runs as an optional
+Vision Lab stage. A fixed camera-to-L2 mount, measured transform, and timestamp
+alignment are needed before assigning camera labels to LiDAR points.
 
 ## The lab
 
