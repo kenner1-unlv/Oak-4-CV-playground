@@ -35,10 +35,12 @@ share one camera pipeline and switch which optional model stages run.
   Orin stores appearance candidates without changing provisional IDs from them.
 
 The screenshots below were captured from the running v0.12.3 viewer on
-2026-11-08. They show Targets Only at full size, with mask outlines, range
-labels, and the spatial field below the main view. The L2 relay was offline
-during capture, so the field shows camera targets but no live LiDAR points.
-Displayed class names are model outputs, not hand-verified labels.
+2026-11-08. Vision Lab shows Targets Only at full size with mask outlines,
+target centroids and range labels, plus live L2 dots in the main canvas and
+the radar-style field below it. The L2 relay was offline during the separate
+Training Lab capture. The L2 display is uncalibrated; apparent overlap with
+camera targets is not a measured geometric match. Displayed class names are
+model outputs, not hand-verified labels.
 
 ## Mode 1 — Vision Lab
 
@@ -52,7 +54,7 @@ pane rather than covering it. Targets Only can be the main view with mask
 outlines visible; it disconnects H.264 delivery to that browser while inference
 and stereo continue on the camera.
 
-![Live Vision Lab Targets Only view with full-size segmentation outlines, pose overlay, and the spatial field below the main view](docs/images/housev-targets-only-2026-11-08.png)
+![Live Vision Lab Targets Only view with mask outlines, target centroids, L2 dots, and the radar-style field below the main view](docs/images/housev-targets-lidar-2026-11-08.png)
 
 The mono views show their own grayscale camera frames and calibration-projected
 RGB target centers. They do not copy RGB masks to a different camera's image.
