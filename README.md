@@ -22,18 +22,22 @@ pipeline and switch which optional model stages run.
 
 - **Object outlines and range:** YOLOv8 Large segmentation draws RGB-aligned
   mask contours and target labels; stereo depth estimates each target's range.
+  Targets Only draws the contours on its own dark canvas and can fill the main
+  view.
 - **Multiple camera views:** Color, left mono, right mono, and Targets Only can
-  share the page with the sampled Unitree L2 field. Mono views project target
-  centers from calibration; they do not display RGB mask contours as mono masks.
+  share the page with the sampled Unitree L2 field. The smaller view sits below
+  the main view beside the target index, so it does not cover the main image.
+  Mono views project target centers from calibration; they do not display RGB
+  mask contours as mono masks.
 - **Model comparison:** Training Lab adds independent left and right mono
   detections and shows agreement, disagreement, or missing evidence per target.
 - **Optional person and identity evidence:** Vision Lab can draw Lite-HRNet
   pose keypoints on tracked people and sample DINOv3 object embeddings. The
   Orin stores appearance candidates without changing provisional IDs from them.
 
-The three screenshots below show the earlier v0.9.2 viewer and its outlines,
-mono projection, and model comparison. They do not show the newer pose and
-DINO controls.
+The three screenshots below are from the earlier v0.9.2 viewer. They show the
+camera, mono projection, and model comparison, but do not clearly show the
+current full-size Targets Only outlines or the current unobstructed layout.
 
 ## Mode 1 — Vision Lab
 
@@ -42,8 +46,10 @@ The spatial viewer, served locally at `http://127.0.0.1:8082/` after the
 segmentation, stereo-derived range, short-term tracks, and an unaligned
 Unitree L2 preview. Switch among Color, Left mono, Right mono, and Targets
 Only. Any source can swap with the top-down spatial field between the main
-pane and picture-in-picture (PiP). Targets Only disconnects H.264 delivery to
-that browser while inference and stereo continue on the camera.
+pane and picture-in-picture (PiP). The PiP and target index sit below the main
+pane rather than covering it. Targets Only can be the main view with mask
+outlines visible; it disconnects H.264 delivery to that browser while inference
+and stereo continue on the camera.
 
 ![House V Color view with segmentation targets and L2 spatial PiP](docs/images/spatial-vision-lab.png)
 
