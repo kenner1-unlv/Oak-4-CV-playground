@@ -14,9 +14,8 @@ measure throughput, expose conflicting sensor evidence, and design the next
 evaluation before claiming accuracy. Start with the [architecture](docs/architecture.md),
 [experiment menu](docs/experiments.md), and [known limits](#known-limits).
 
-**Repository app version:** v0.12.3. The latest documented live check ran this
-version on the OAK on 2026-11-01. The two browser modes share one camera
-pipeline and switch which optional model stages run.
+**Running app verified 2026-11-08:** v0.12.3 on the OAK. The two browser modes
+share one camera pipeline and switch which optional model stages run.
 
 ## What the lab shows
 
@@ -35,9 +34,11 @@ pipeline and switch which optional model stages run.
   pose keypoints on tracked people and sample DINOv3 object embeddings. The
   Orin stores appearance candidates without changing provisional IDs from them.
 
-The three screenshots below are from the earlier v0.9.2 viewer. They show the
-camera, mono projection, and model comparison, but do not clearly show the
-current full-size Targets Only outlines or the current unobstructed layout.
+The screenshots below were captured from the running v0.12.3 viewer on
+2026-11-08. They show Targets Only at full size, with mask outlines, range
+labels, and the spatial field below the main view. The L2 relay was offline
+during capture, so the field shows camera targets but no live LiDAR points.
+Displayed class names are model outputs, not hand-verified labels.
 
 ## Mode 1 — Vision Lab
 
@@ -51,12 +52,10 @@ pane rather than covering it. Targets Only can be the main view with mask
 outlines visible; it disconnects H.264 delivery to that browser while inference
 and stereo continue on the camera.
 
-![House V Color view with segmentation targets and L2 spatial PiP](docs/images/spatial-vision-lab.png)
+![Live Vision Lab Targets Only view with full-size segmentation outlines, pose overlay, and the spatial field below the main view](docs/images/housev-targets-only-2026-11-08.png)
 
 The mono views show their own grayscale camera frames and calibration-projected
 RGB target centers. They do not copy RGB masks to a different camera's image.
-
-![House V left mono view with projected target markers and L2 PiP](docs/images/spatial-mono-left.png)
 
 The target index retains the camera track ID (`T`) and Orin provisional global
 ID (`G`) for debugging. Spatial dots use object names. A `G` number is an ID
@@ -72,10 +71,7 @@ mono detection names the same class as RGB, `−` when it names a different
 class, and `?` when no current match is available. Raw model scores remain
 separate; the display does **not** calculate a fused probability.
 
-![House V Training Lab with L2 field main, targets PiP, and RGB/mono evidence](docs/images/training-lab-spatial.png)
-
-Screenshots were captured from the live v0.9.2 viewer on 2026-10-26;
-displayed class names are model outputs, not hand-verified labels.
+![Live Training Lab Targets Only view with full-size segmentation outlines, RGB and mono comparison, and the spatial field below](docs/images/housev-training-targets-2026-11-08.png)
 
 The Orin's current global-ID matcher still relies on RGB track geometry,
 class, and time. The mono matches shown here are candidate evidence. Nearby
