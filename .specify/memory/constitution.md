@@ -1,39 +1,39 @@
-# Oak 4 CV Playground Constitution
+# LEGO CV Lab Constitution
 
-**Status**: Proposed project principles for this feature; subject to maintainer review.
+**Status**: Proposed principles for the standalone lab; subject to maintainer review.
 
 ## Core Principles
 
 ### I. Measured Claims
 
-Distinguish a live observation, a recorded benchmark, a simulated replay, and a planned capability. Model predictions, provisional object IDs, and an uncalibrated LiDAR preview are never labeled ground truth. Every performance or accuracy claim cites its dataset, method, hardware, and limits.
+Separate human ground truth, predictions, local evaluation, and physical OAK verification. Accuracy claims identify images, labels, models, metric denominators, conditions, and limits. An attractive overlay is not proof of accuracy.
 
-### II. Preserve Raw Evidence
+### II. Preserve Source Evidence
 
-Raw captured evidence, human corrections, derived labels, model outputs, and evaluation results retain separate provenance. Capture manifests identify sensor, model, calibration, time, and immutable content. A later model run cannot overwrite the original evidence or a held-out test set.
+OAK snapshots are immutable source evidence. Annotations, corrections, predictions, dataset splits, and findings have separate provenance and revisions. Later experiments cannot overwrite original images or frozen held-out labels.
 
-### III. Live Operation Stays Safe
+### III. Controlled LEGO Benchmark
 
-Recording is opt-in. The live OAK view and current Orin identity path remain usable while the training workflow is introduced. Training and model promotion are distinct from capture and review; candidate models run in replay or shadow mode until measured gates are met. Preserve a rollback path for any live-model change.
+Begin with roughly 20 varied pieces shaken flat and confirmed separate, non-touching, and non-overlapping. Record the actual count. Keep color and size/footprint rules stable across in-plane rotation. Increase difficulty in named stages and report changed conditions separately.
 
-### IV. Treat Sensors Independently Until Calibrated
+### IV. Reproducible Training and Evaluation
 
-RGB, left mono, right mono, stereo depth, and Unitree L2 observations carry source and time. Missing or stale sensor data remains missing or stale. LiDAR points cannot inherit camera labels or support distance-accuracy claims without measured spatial calibration, time alignment, and labeled reference scenes.
+Keep images from one arrangement or collection session in one split. Freeze held-out test membership before tuning. Compare fine-tuned and from-scratch candidates with stated starting weights, data, budget, and shared test examples. Disclose departures from a controlled comparison.
 
-### V. Reproducible Evaluation
+### V. Scope and Evidence Boundaries
 
-For each experiment, record task, scene and session identifiers, hardware and model versions, configuration, dataset split, baseline, metrics, and known gaps. Split by session or scene to prevent adjacent-frame leakage. Freeze the held-out test split before tuning and compare candidates on the same examples. Progressively harder LEGO board stages must identify the changed condition; color, count, size, and separation claims require human-reviewed labels and stated denominators.
+The lab stands independently from House V and Orin identity fusion. Unitree L2 is outside LEGO piece recognition. Local training, model conversion, and physical OAK execution are distinct states and must be labeled accurately.
 
 ## Delivery Constraints
 
-Keep large recordings, private scene content, training artifacts, and device credentials out of Git. Record code, object taxonomy, Git-safe findings, provenance, and reproducible instructions in the repository. Treat local tests, replay, and physical-device verification as separate evidence levels. Do not represent a prepared feature as deployed.
+Keep raw images, recordings, weights, private scene content, and credentials out of Git. Track code, object taxonomy, safe manifests, reproducible instructions, and evidence-backed findings. Do not claim prepared or local-only work is deployed.
 
 ## Development Workflow
 
-Specify user-visible outcomes first, then plan bounded increments and explicit acceptance checks. Prefer independent tasks that can be implemented and tested in parallel. Verify compatibility across OAK, Orin, and browser contracts before changing deployed behavior. Require explicit owner approval before pushing, deploying, or promoting a candidate model.
+Specify benchmark and annotation rules before implementation. Use independent tasks where practical. Validate scoring on labeled fixtures, then verify actual OAK behavior as a distinct gate. Require explicit owner approval before pushing, deploying, or promoting a candidate model.
 
 ## Governance
 
-This proposed constitution guides the current feature specification and plan. The maintainer may amend it; changes should state why and update affected plans and tests. It does not claim prior project ratification.
+These proposed principles guide the current spec and plan. The maintainer may amend them with a reason and matching plan/test updates. They do not claim prior project ratification.
 
-**Version**: 0.1.0-proposed | **Drafted**: 2026-11-09
+**Version**: 0.2.0-proposed | **Drafted**: 2026-11-09
