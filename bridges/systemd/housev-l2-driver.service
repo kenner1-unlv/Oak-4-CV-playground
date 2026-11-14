@@ -1,0 +1,15 @@
+[Unit]
+Description=Unitree L2 ROS 2 driver for House V
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=ROS_DOMAIN_ID=0
+Environment=RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+ExecStart=/bin/bash -lc "source /opt/ros/humble/setup.bash; source /data/ros_ws/install/setup.bash; exec ros2 launch unitree_lidar_ros2 launch.py"
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -1,5 +1,8 @@
 # Unitree L2 browser relay
 
+See the [system map](../docs/system-architecture.md) for the complete
+OAK-to-Orin-to-browser data flow and future integration gates.
+
 The camera app continues to process RGB, stereo depth, and detections on the
 OAK. On the Orin, `l2_cloud_relay.py` subscribes to the existing ROS 2
 `/unilidar/cloud` topic and exposes a sampled JSON scan over HTTP. The camera
@@ -48,6 +51,12 @@ shows `L2 OFFLINE`. The L2 toggle only affects browser drawing.
 The current lab driver and relay were started as transient user services.
 They run independently of the Orin's full robot bringup and need to be
 started again after a reboot.
+
+Checked-in [driver](systemd/housev-l2-driver.service) and
+[relay](systemd/housev-l2-relay.service) user-unit templates capture those
+launch commands. They are examples for a future persistent setup, not the
+units currently installed on the Orin. Validate ROS paths, wired address,
+start order, and recovery before enabling them on the device.
 
 ## Provisional Orin identities
 
