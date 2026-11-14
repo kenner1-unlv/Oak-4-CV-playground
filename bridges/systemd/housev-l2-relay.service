@@ -1,0 +1,16 @@
+[Unit]
+Description=House V Unitree L2 sampled cloud relay
+After=network-online.target housev-l2-driver.service
+Wants=network-online.target housev-l2-driver.service
+
+[Service]
+Type=simple
+Environment=ROS_DOMAIN_ID=0
+Environment=RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+Environment=L2_RELAY_HOST=192.168.50.2
+ExecStart=/bin/bash -lc "source /opt/ros/humble/setup.bash; source /data/ros_ws/install/setup.bash; exec python3 /data/oak4/l2_cloud_relay.py"
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

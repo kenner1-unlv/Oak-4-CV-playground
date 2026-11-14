@@ -199,10 +199,12 @@ Confidence, IoU, and projector settings reset to app defaults on restart.
 | --- | --- |
 | [Camera app](apps/spatial-segmentation/) | Segmentation, mono detectors, stereo range, House V views and controls. |
 | [Architecture](docs/architecture.md) | Processing graph, result records, streams, and limits. |
+| [System map](docs/system-architecture.md) | Orin services, OAK/Orin/L2 network paths, diagrams, and future integration gates. |
 | [Training Lab design](docs/training-lab.md) | Recording, review, and train/validation/test direction. |
 | [Experiment menu](docs/experiments.md) | Dense-scene benchmark and candidate pipelines. |
 | [Resolution comparison](docs/resolution-experiment.md) | Earlier scan and video trials. |
 | [Orin bridges](bridges/README.md) | Identity and sampled Unitree L2 relay setup. |
+| [Orin utilities](scripts/) | Result-feed diagnostics and exact-device OAK update checks. |
 
 ## Known limits
 

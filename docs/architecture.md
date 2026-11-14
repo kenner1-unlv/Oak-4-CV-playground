@@ -1,5 +1,8 @@
 # Pipeline architecture
 
+For the OAK-to-Orin, L2, and browser paths, see the
+[system map](system-architecture.md).
+
 The OAK 4 D Pro runs the model and stereo pipeline. The Orin builds/installs
 the app and optionally consumes metadata; it does not process browser video.
 One camera app provides several switchable browser views.
